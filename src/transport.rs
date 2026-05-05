@@ -26,8 +26,8 @@ use tower::Service;
 
 use crate::arti::ArtiClient;
 
-pub static ARTI_CONNECT_CALLS: AtomicUsize = AtomicUsize::new(0);
-static ARTI_CONNECTION_IDS: AtomicUsize = AtomicUsize::new(0);
+pub static TOR_CONNECT_CALLS: AtomicUsize = AtomicUsize::new(0);
+static TOR_CONNECTION_IDS: AtomicUsize = AtomicUsize::new(0);
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type HyperBody = Full<Bytes>;
@@ -79,24 +79,24 @@ impl Service<Uri> for ArtiConnector {
                 .to_owned();
             let port = uri.port_u16().unwrap_or(443);
 
-            let connection_id = ARTI_CONNECTION_IDS.fetch_add(1, Ordering::SeqCst) + 1;
-            ARTI_CONNECT_CALLS.fetch_add(1, Ordering::SeqCst);
+            let connection_id = TOR_CONNECTION_IDS.fetch_add(1, Ordering::SeqCst) + 1;
+            TOR_CONNECT_CALLS.fetch_add(1, Ordering::SeqCst);
             tracing::info!(
                 connection_id,
                 rpc_scheme = scheme,
                 rpc_host = %host,
                 rpc_port = port,
-                "opening RPC stream through Arti"
+                "opening RPC stream through Tor"
             );
             let stream = tor
                 .connect((host.as_str(), port).into_tor_addr()?)
                 .await
-                .with_context(|| format!("connecting to {host}:{port} through Arti"))?;
+                .with_context(|| format!("connecting to {host}:{port} through Tor"))?;
             tracing::info!(
                 connection_id,
                 rpc_host = %host,
                 rpc_port = port,
-                "Arti stream established; circuit path is not exposed by arti-client DataStream"
+                "Tor stream established; circuit path is not exposed by arti-client DataStream"
             );
 
             let server_name = ServerName::try_from(host)
@@ -104,8 +104,8 @@ impl Service<Uri> for ArtiConnector {
             let tls_stream = tls
                 .connect(server_name, stream)
                 .await
-                .context("performing rustls handshake over Arti stream")?;
-            tracing::info!(connection_id, "TLS handshake completed over Arti stream");
+                .context("performing rustls handshake over Tor stream")?;
+            tracing::info!(connection_id, "TLS handshake completed over Tor stream");
 
             Ok(TokioIo::new(ArtiTlsStream(tls_stream)))
         })

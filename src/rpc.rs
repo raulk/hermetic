@@ -38,7 +38,7 @@ pub async fn raw_request(
     method: &str,
     params: Value,
 ) -> anyhow::Result<Value> {
-    tracing::info!(rpc_method = method, "reverse JSON-RPC request through Arti");
+    tracing::info!(rpc_method = method, "reverse JSON-RPC request through Tor");
     let client: Client<ArtiConnector, Full<Bytes>> =
         Client::builder(TokioExecutor::new()).build(ArtiConnector::new(tor));
     let body = serde_json::json!({
@@ -55,7 +55,7 @@ pub async fn raw_request(
     let response = client
         .request(request)
         .await
-        .context("sending reverse JSON-RPC request through Arti")?;
+        .context("sending reverse JSON-RPC request through Tor")?;
     let status = response.status();
     let bytes = response
         .into_body()
@@ -105,7 +105,7 @@ pub async fn raw_http_request(
     tracing::info!(
         http_method = %request.method,
         http_uri = %uri,
-        "reverse HTTP request through Arti"
+        "reverse HTTP request through Tor"
     );
     let method = Method::from_str(&request.method).context("parsing reverse HTTP method")?;
     let body = match request.body_base64 {
@@ -127,7 +127,7 @@ pub async fn raw_http_request(
     let response = client
         .request(request)
         .await
-        .context("sending reverse HTTP request through Arti")?;
+        .context("sending reverse HTTP request through Tor")?;
     let status = response.status().as_u16();
     let headers = response
         .headers()

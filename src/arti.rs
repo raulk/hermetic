@@ -17,11 +17,11 @@ pub enum IsolationLabel {
 pub async fn bootstrap(state_dir: &Path, cache_dir: &Path) -> anyhow::Result<ArtiClient> {
     let config = TorClientConfigBuilder::from_directories(state_dir, cache_dir)
         .build()
-        .context("building Arti config")?;
+        .context("building Tor client config via Arti")?;
 
     TorClient::create_bootstrapped(config)
         .await
-        .context("bootstrapping Arti")
+        .context("bootstrapping Tor client via Arti")
 }
 
 pub fn isolated_for(client: &ArtiClient, _label: IsolationLabel) -> ArtiClient {

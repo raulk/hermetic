@@ -1,10 +1,10 @@
 # Undercover
 
 Undercover is a proof of concept for Railgun transactions whose network
-egress is owned by Rust and routed through Arti. The current active path
+egress is owned by Rust and routed through Tor. The current active path
 keeps everything in one process: Rust embeds Deno for the Railgun SDK, denies
 network access inside JavaScript, and services SDK JSON-RPC/HTTP requests
-through Arti.
+through Tor.
 
 The Docker/Node sidecar is still present as a fallback and comparison harness,
 but it is no longer the preferred runtime boundary.
@@ -14,7 +14,7 @@ but it is no longer the preferred runtime boundary.
 ```
 Rust CLI
   ├─ Tor client via Arti
-  ├─ Alloy provider over an Arti-backed hyper connector
+  ├─ Alloy provider over a Tor-backed hyper connector
   ├─ Alloy wallet signer and transaction broadcaster
   └─ Embedded Deno worker
        └─ bundled Railgun SDK runtime
@@ -23,13 +23,13 @@ Rust CLI
 The embedded worker loads `embedded/railgun_runtime.iife.js`, generated from
 `sidecar/runtime.mjs`. JavaScript cannot open sockets or use ambient fetch.
 When the Railgun SDK needs JSON-RPC or GraphQL, it emits a reverse request to
-Rust; Rust performs the request through Arti.
+Rust; Rust performs the request through Tor.
 
 Railgun quick-sync uses:
 
 `https://rail-squid.squids.live/squid-railgun-eth-sepolia-v2/graphql`
 
-through the same Arti reverse-HTTP path.
+through the same Tor reverse-HTTP path.
 
 ## Requirements
 
@@ -108,7 +108,7 @@ Ledger options are available anywhere a public signer is required:
 The Ledger only protects the public EOA used to pay gas and broadcast
 transactions. The Railgun wallet mnemonic is still loaded by the SDK runtime.
 
-Ping an RPC endpoint through Arti:
+Ping an RPC endpoint through Tor:
 
 ```sh
 cargo run -- ping --rpc https://ethereum-sepolia-rpc.publicnode.com
@@ -136,7 +136,7 @@ cargo run --features deno-runtime -- \
   --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
 ```
 
-Refresh private balance through Arti:
+Refresh private balance through Tor:
 
 ```sh
 cargo run --features deno-runtime -- \
@@ -176,7 +176,7 @@ prefer the embedded path unless the goal explicitly changes.
 ## Repository Map
 
 - `src/embedded.rs`: embedded Deno worker and reverse-RPC pump.
-- `src/transport.rs`: Arti-backed hyper connector.
+- `src/transport.rs`: Tor-backed hyper connector.
 - `src/rpc.rs`: Alloy provider construction over Arti.
 - `src/main.rs`: CLI orchestration.
 - `sidecar/runtime.mjs`: shared Railgun runtime logic.
@@ -188,6 +188,6 @@ prefer the embedded path unless the goal explicitly changes.
 
 ## Notes
 
-Arti does not currently provide official Node, Deno, or Bun FFI bindings.
+Arti, the Rust Tor library, does not currently provide official Node, Deno, or Bun FFI bindings.
 Those runtimes could call a custom native shim, but this project avoids that
 extra ABI surface by keeping Arti in Rust and embedding JavaScript instead.

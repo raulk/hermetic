@@ -16,7 +16,7 @@ use undercover::{
     arti::{self, IsolationLabel},
     rpc,
     sidecar::{Health, LoadedWallet, PopulatedTransaction, RefreshedBalance, Sidecar},
-    transport::ARTI_CONNECT_CALLS,
+    transport::TOR_CONNECT_CALLS,
 };
 
 fn init_tracing() {
@@ -209,14 +209,14 @@ async fn main() -> anyhow::Result<()> {
                 .get_block_number()
                 .await
                 .context("eth_blockNumber")?;
-            let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
+            let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
 
             println!("chain_id={chain_id}");
             println!("block_number={block_number}");
-            println!("arti_connect_calls={calls}");
+            println!("tor_connect_calls={calls}");
             anyhow::ensure!(
                 calls > 0,
-                "provider call completed without ArtiConnector use"
+                "provider call completed without Tor connector use"
             );
         }
         Command::SidecarSmoke {
@@ -438,11 +438,11 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("sending shield base-token transaction")?;
             println!("tx_hash={}", pending.tx_hash());
-            let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
-            println!("arti_connect_calls={calls}");
+            let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
+            println!("tor_connect_calls={calls}");
             anyhow::ensure!(
                 calls > 0,
-                "transaction send completed without ArtiConnector use"
+                "transaction send completed without Tor connector use"
             );
         }
         Command::RefreshBalance {
@@ -553,9 +553,9 @@ async fn main() -> anyhow::Result<()> {
             println!("token_address={}", refreshed.token_address);
             println!("balance={}", refreshed.balance);
             println!("spendable_balance={}", refreshed.spendable_balance);
-            let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
-            println!("arti_connect_calls={calls}");
-            anyhow::ensure!(calls > 0, "refresh completed without ArtiConnector use");
+            let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
+            println!("tor_connect_calls={calls}");
+            anyhow::ensure!(calls > 0, "refresh completed without Tor connector use");
         }
         Command::UnshieldBaseToken {
             rpc,
@@ -684,11 +684,11 @@ async fn main() -> anyhow::Result<()> {
             println!("from={from}");
             println!("recipient={recipient}");
             println!("amount_wei={amount_wei}");
-            let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
-            println!("arti_connect_calls={calls}");
+            let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
+            println!("tor_connect_calls={calls}");
             anyhow::ensure!(
                 calls > 0,
-                "unshield proof completed without ArtiConnector use"
+                "unshield proof completed without Tor connector use"
             );
             if dry_run {
                 return Ok(());
@@ -718,11 +718,11 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("sending unshield base-token transaction")?;
             println!("tx_hash={}", pending.tx_hash());
-            let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
-            println!("arti_connect_calls={calls}");
+            let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
+            println!("tor_connect_calls={calls}");
             anyhow::ensure!(
                 calls > 0,
-                "transaction send completed without ArtiConnector use"
+                "transaction send completed without Tor connector use"
             );
         }
     }

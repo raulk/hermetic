@@ -2,18 +2,18 @@
 
 ## Embedded runtime direction
 
-- The active single-process path is Rust owning Arti and embedding Deno.
+- The active single-process path is Rust owning Tor via Arti and embedding Deno.
   JavaScript must not own network egress. The embedded worker should keep
   Deno network permissions denied and ask Rust to service JSON-RPC/HTTP
-  through Arti.
+  through Tor.
 - Treat `sidecar/runtime.mjs` as the shared Railgun runtime surface.
   `sidecar/main.mjs` is the Docker fallback adapter; `src/embedded.rs` is
   the embedded Deno adapter.
 - Arti is a Rust crate integration point, not a ready-made JS FFI binding.
   Node, Deno, or Bun could call a custom C/N-API shim, but that would be a
-  new native binding surface maintained here. Prefer Rust-owned Arti plus
+  new native binding surface maintained here. Prefer Rust-owned Tor via Arti plus
   embedded JS host ops for this project.
-- Running Arti as SOCKS/HTTP CONNECT is useful for comparison, but it
+- Running Tor via a SOCKS/HTTP CONNECT proxy is useful for comparison, but it
   reintroduces a local proxy process/socket boundary. Do not switch back to
   that unless the explicit goal changes.
 
@@ -37,7 +37,7 @@
   `shield-base-token --embedded --dry-run`, `refresh-balance --embedded`,
   and unshield preflight.
 - `refresh_balance` and unshield preflight should complete via Railgun
-  quick-sync GraphQL over Arti plus local balance decryption. Avoid the SDK
+  quick-sync GraphQL over Tor plus local balance decryption. Avoid the SDK
   slow `eth_getLogs` scan from deployment block; it can time out against
   public RPC endpoints.
 - Keep the embedded permission smoke meaningful: Deno `fetch`,
@@ -51,5 +51,5 @@
 - `wayfinding/deno-embedding/` contains exploratory Deno embedding proofs.
   They are retained for design history only and should not be part of the
   normal build or verification path.
-- `examples/spike.rs` remains the useful Arti transport spike and may stay
+- `examples/spike.rs` remains the useful Tor transport spike and may stay
   under Cargo examples.

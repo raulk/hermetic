@@ -6,7 +6,7 @@ use http::Uri;
 use undercover::{
     arti::{self, IsolationLabel},
     rpc,
-    transport::ARTI_CONNECT_CALLS,
+    transport::TOR_CONNECT_CALLS,
 };
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let cache_dir = std::env::temp_dir().join("undercover-spike-arti-cache");
     let tor = arti::bootstrap(&state_dir, &cache_dir)
         .await
-        .context("bootstrapping Arti")?;
+        .context("bootstrapping Tor")?;
     let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
     let provider = rpc::provider(tor, rpc_url);
 
@@ -32,15 +32,15 @@ async fn main() -> anyhow::Result<()> {
         .get_block_number()
         .await
         .context("eth_blockNumber")?;
-    let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
+    let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
 
     println!("chain_id={chain_id}");
     println!("block_number={block_number}");
-    println!("arti_connect_calls={calls}");
+    println!("tor_connect_calls={calls}");
 
     anyhow::ensure!(
         calls > 0,
-        "provider call completed without ArtiConnector use"
+        "provider call completed without Tor connector use"
     );
     Ok(())
 }

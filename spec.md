@@ -1,8 +1,8 @@
 # Undercover
 
 Proof of concept for sending anonymous Ethereum transactions by combining
-Arti (embedded Tor in Rust) with Railgun (zk-SNARK on-chain privacy on
-Ethereum). The defining property of the system: every byte of network
+Tor (embedded in Rust via Arti) with Railgun (zk-SNARK on-chain privacy
+on Ethereum). The defining property of the system: every byte of network
 egress between this process and any Ethereum infrastructure travels
 through a Tor circuit, while every on-chain transaction in the demo is
 a Railgun shielded operation.
@@ -17,7 +17,7 @@ supported), a flow that:
 2. Performs a private transfer between two shielded addresses.
 3. Unshields to a fresh EOA.
 
-All RPC and chain-scan traffic in (1)-(3) is routed through Arti.
+All RPC and chain-scan traffic in (1)-(3) is routed through Tor.
 Railgun proof generation runs in an embedded `deno_runtime` worker
 inside the Rust process. The worker loads a bundled Railgun SDK runtime,
 has no network permission, and can only read/write the local proving
@@ -41,7 +41,7 @@ The checked-in implementation currently supports both runtime boundaries:
   `embedded/railgun_runtime.iife.js`, denies network access inside the
   JS worker, and services SDK reverse JSON-RPC/HTTP requests through
   Arti. Balance refresh and unshield preflight use Railgun quick-sync
-  GraphQL through Arti, then decrypt balances locally in the embedded
+  GraphQL through Tor, then decrypt balances locally in the embedded
   worker.
 - The Docker/Node sidecar remains as a fallback/comparison harness. Any
   lower section that describes `ingest_events` or a Docker-only runtime
@@ -114,7 +114,7 @@ What the system does not hide:
 |  - Merkle-root reader      |                          |   - merkle tree state     |
 +-------------+--------------+                          +---------------------------+
               |
-              | TCP via Arti circuit (TorClient::connect)
+              | TCP via Tor circuit (TorClient::connect)
               v
 +--------------------------------------------------+
 | Selected testnet JSON-RPC endpoint (pending Q5)  |
@@ -130,7 +130,7 @@ System boundary invariants:
   Attempts to open sockets or call Deno `fetch` fail at runtime; the
   `node:net` smoke path is denied too.
 - The embedded worker therefore cannot do its own scanning; Rust handles
-  SDK reverse JSON-RPC/HTTP requests and executes them through Arti.
+  SDK reverse JSON-RPC/HTTP requests and executes them through Tor.
 - This is not a complete OS sandbox. A compromised Node runtime or kernel-level
   bypass is out of scope for the PoC; both an OS sandbox and a
   network namespace are tracked as hardening follow-ups.
@@ -336,7 +336,7 @@ event-sync phase is isolated separately from each tx phase to avoid
 linking "user X sees these notes" with "user X submits this tx" via
 shared exit relay.
 
-Returns once Arti reports the directory bootstrap is ready.
+Returns once the Tor client reports the directory bootstrap is ready.
 
 ```rust
 // src/transport.rs
@@ -436,7 +436,7 @@ files, injects host artifact/log/reverse-RPC operations, and loads
 `embedded/railgun_runtime.iife.js`. The bundle is generated from
 `sidecar/runtime.mjs` by `sidecar/build-embedded.mjs`. `call_with_reverse_rpc`
 keeps JavaScript proof generation inside the worker while Rust services
-SDK JSON-RPC and GraphQL requests through Arti.
+SDK JSON-RPC and GraphQL requests through Tor.
 
 `spawn` invokes Docker with the exact argv shown in the Sidecar section
 below. `call` writes a single-line JSON-RPC request to stdin, then
@@ -445,7 +445,7 @@ stdin and awaits child exit.
 
 CLI subcommands (`src/main.rs`):
 
-- `undercover ping --rpc <URL>`: bootstraps Arti, builds provider, calls
+- `undercover ping --rpc <URL>`: bootstraps Tor, builds provider, calls
   `eth_blockNumber` and `eth_chainId`. Prints both. Verifies that the
   network path works.
 - `undercover sidecar-smoke --embedded`: loads the bundled SDK in the
@@ -459,7 +459,7 @@ CLI subcommands (`src/main.rs`):
   --railgun-mnemonic <BIP39> --amount-wei <wei>`: loads the Railgun
   wallet, asks the active Railgun runtime to populate Sepolia V2
   RelayAdapt base-token shield calldata, signs in Rust, and broadcasts
-  through Arti. Add `--embedded` for the Deno worker and `--dry-run` to
+  through Tor. Add `--embedded` for the Deno worker and `--dry-run` to
   stop after calldata construction.
 - `undercover signer-address --private-key <HEX>`: prints the EOA
   address to fund before running `shield-base-token`.
@@ -569,7 +569,7 @@ Persistent encrypted storage is out of scope.
 
 `ingest_events`. Feeds a batch of Railgun-contract event logs into
 the wallet's note scanner. The Rust side fetches these logs through
-Arti and ships them to the sidecar in chronological order. The
+Tor and ships them to the sidecar in chronological order. The
 sidecar updates its note DB and merkle state and returns the highest
 block number it has now scanned to.
 
@@ -692,7 +692,7 @@ Custody and signing summary:
 
 ## Data flow
 
-The demo runs four phases. Each phase uses a distinct Arti circuit
+The demo runs four phases. Each phase uses a distinct Tor circuit
 obtained via `arti::isolated_for(...)` so the streams cannot share an
 exit relay across phases.
 
@@ -735,13 +735,13 @@ The split is deliberate. Only proof construction needs the Railgun
 SDK and Railgun's spending authority; the SDK lives in the sidecar
 and is fed log batches over stdio. Submission, gas estimation, nonce
 fetching, log fetching, and receipt polling all use the same
-Arti-tunneled alloy provider in Rust. This makes the egress audit
+Tor-routed alloy provider in Rust. This makes the egress audit
 trivial: every external connection is a `TorClient::connect` call
 inside `transport.rs`.
 
 ## Security invariants
 
-I1. **All TCP egress goes through Arti.** Every TCP connection
+I1. **All TCP egress goes through Tor.** Every TCP connection
 originating from this system is opened by `TorClient::connect`
 inside `ArtiConnector::call` in `src/transport.rs`. There is no
 other call site that opens a socket. Enforced by `clippy.toml`
@@ -799,7 +799,7 @@ I8. **No reqwest, no `HttpConnector`, no transport that builds its
 own connector pool.** The only permitted hyper connector in the
 binary's dependency graph is `ArtiConnector`. Enforced as in I1.
 
-I9. **No clearnet I/O during the demo flow except Arti's own guard
+I9. **No clearnet I/O during the demo flow except Tor own guard
 traffic.** Verified at runtime by the acceptance check that
 captures all egress and asserts only Tor relay destinations
 (see § Build, run, verify).
@@ -1058,7 +1058,7 @@ the alloy/hyper feature set (~2 seconds).
 
 The first implementation milestone is the `examples/spike.rs` file
 defined in M1a. The spike's `ArtiConnector::call` increments a
-process-wide `arti_connect_calls` counter via
+process-wide `tor_connect_calls` counter via
 `tracing::Span::record`. After one provider call (`eth_chainId` or
 `eth_blockNumber`) returns, an integration test asserts the counter
 is ≥ 1. If a provider request succeeds without hitting
@@ -1164,7 +1164,7 @@ just check-event-sync
 
 A deterministic fixture-based test:
 
-- Rust fetches a known block range through Arti from the chosen
+- Rust fetches a known block range through Tor from the chosen
   testnet (the range is small enough to be a checked-in fixture
   if we cache the responses).
 - The sidecar ingests the fetched logs.
@@ -1186,7 +1186,7 @@ just egress-audit-linux <subcommand>
 
 Mechanics in § Build, run, verify, acceptance check 3.
 
-**Hierarchy:** tracing logs (`arti_connect_calls`, circuit IDs,
+**Hierarchy:** tracing logs (`tor_connect_calls`, circuit IDs,
 phase labels) are useful for fast inner-loop iteration but are
 **not** the proof. Tracing-green is necessary but not sufficient.
 Pcap-green is the milestone gate. The risk of treating pcap as
@@ -1263,7 +1263,7 @@ every milestone gate to the exact loop, test, or check that
 witnesses it. Format:
 
 ```
-- I1 (all TCP egress through Arti):
+- I1 (all TCP egress through Tor):
     static: L1 (cargo tree grep), L3 (clippy + ripgrep)
     runtime: L2 (connector counter), L7 (egress audit)
     mutation: M-A, M-G
@@ -1292,10 +1292,10 @@ The Docker sidecar path still exists as a fallback/comparison harness,
 but it is no longer the only runtime path.
 
 Q2. **Public Railgun broadcaster vs self-broadcast for the private
-transfer?** PoC default: self-broadcast through Arti. Simpler, keeps
+transfer?** PoC default: self-broadcast through Tor. Simpler, keeps
 the egress audit trivial. Broadcaster integration gives a larger
 anonymity set but introduces a third-party dependency that must also
-be reachable through Arti and that learns metadata about transfer fees.
+be reachable through Tor and that learns metadata about transfer fees.
 Tracked as a follow-up after the PoC clears M6.
 
 Q4. **Provider load balancing.** PoC targets one RPC endpoint.

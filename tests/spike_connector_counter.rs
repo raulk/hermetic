@@ -6,9 +6,9 @@ fn spike_source_contains_connector_counter_assertion() {
     let spike = std::fs::read_to_string("examples/spike.rs").unwrap();
     let main = std::fs::read_to_string("src/main.rs").unwrap();
 
-    assert!(transport.contains("ARTI_CONNECT_CALLS.fetch_add"));
-    assert!(spike.contains("provider call completed without ArtiConnector use"));
-    assert!(main.contains("provider call completed without ArtiConnector use"));
+    assert!(transport.contains("TOR_CONNECT_CALLS.fetch_add"));
+    assert!(spike.contains("provider call completed without Tor connector use"));
+    assert!(main.contains("provider call completed without Tor connector use"));
 }
 
 #[test]
