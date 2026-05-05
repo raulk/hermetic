@@ -38,12 +38,87 @@ function requireHost(method) {
   return op;
 }
 
+function trace(message) {
+  host.log?.(`[undercover-runtime] ${message}`);
+}
+
+function describeItem(item) {
+  if (item == null) {
+    return 'null';
+  }
+  if (typeof item === 'string') {
+    return `string:${item.length}`;
+  }
+  if (item.byteLength != null) {
+    return `bytes:${item.byteLength}`;
+  }
+  return typeof item;
+}
+
 const artifactStore = new wallet.ArtifactStore(
-  (relativePath) => requireHost('readArtifact')(relativePath),
-  (dir, relativePath, item) =>
-    requireHost('writeArtifact')(dir, relativePath, item),
-  (relativePath) => requireHost('artifactExists')(relativePath),
+  (relativePath) => {
+    const started = Date.now();
+    const item = requireHost('readArtifact')(relativePath);
+    trace(
+      `artifact read path=${relativePath} result=${describeItem(item)} ms=${Date.now() - started}`,
+    );
+    return item;
+  },
+  (dir, relativePath, item) => {
+    trace(`artifact write path=${relativePath} item=${describeItem(item)}`);
+    return requireHost('writeArtifact')(dir, relativePath, item);
+  },
+  (relativePath) => {
+    const exists = requireHost('artifactExists')(relativePath);
+    trace(`artifact exists path=${relativePath} result=${exists}`);
+    return exists;
+  },
 );
+
+async function withSnarkSingleThread(label, operation) {
+  const started = Date.now();
+  const previousBrowser = process.browser;
+  const hadWorker = Object.hasOwn(globalThis, 'Worker');
+  const previousWorker = globalThis.Worker;
+  trace(`snark ${label} start`);
+  try {
+    process.browser = true;
+    globalThis.Worker = undefined;
+    const result = await operation();
+    trace(`snark ${label} ok ms=${Date.now() - started}`);
+    return result;
+  } catch (error) {
+    trace(`snark ${label} failed ms=${Date.now() - started}`);
+    trace(`snark ${label} error ${String(error?.stack ?? error)}`);
+    throw error;
+  } finally {
+    process.browser = previousBrowser;
+    if (hadWorker) {
+      globalThis.Worker = previousWorker;
+    } else {
+      delete globalThis.Worker;
+    }
+  }
+}
+
+const groth16 = {
+  ...snarkjs.groth16,
+  async fullProve(input, wasm, zkey, logger, wtnsCalcOptions, proverOptions) {
+    return withSnarkSingleThread('fullProve', () =>
+      snarkjs.groth16.fullProve(
+        input,
+        wasm,
+        zkey,
+        logger,
+        { ...(wtnsCalcOptions ?? {}), singleThread: true },
+        { ...(proverOptions ?? {}), singleThread: true },
+      ),
+    );
+  },
+  async verify(...args) {
+    return withSnarkSingleThread('verify', () => snarkjs.groth16.verify(...args));
+  },
+};
 
 axios.get = async (url, options = {}) => {
   const response = await reverseHttpFetch(url, {
@@ -94,7 +169,7 @@ async function ensureEngine() {
     undefined,
     false,
   );
-  getEngine().prover.setSnarkJSGroth16(snarkjs.groth16);
+  getEngine().prover.setSnarkJSGroth16(groth16);
   engineStarted = true;
 }
 

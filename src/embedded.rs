@@ -136,8 +136,13 @@ impl EmbeddedRailgun {
             format!(
                 r#"
 globalThis.__undercover_workdir = {cwd};
+globalThis.__dirname = globalThis.__undercover_workdir + "/embedded";
+globalThis.__filename = globalThis.__dirname + "/railgun_runtime.iife.js";
 globalThis.__undercover_reverse = [];
 globalThis.__undercover_deno_fetch = globalThis.fetch;
+globalThis.__undercover_stringify = (value) => JSON.stringify(value, (_, item) =>
+  typeof item === "bigint" ? item.toString() : item
+);
 globalThis.__undercover_require_ready = import("node:module").then((module) => {{
   globalThis.require = module.createRequire("file://" + globalThis.__undercover_workdir + "/railgun-runtime/runtime.mjs");
 }});
@@ -155,6 +160,9 @@ globalThis.__undercover_host = {{
   readArtifact(relativePath) {{
     try {{
       const path = `${{globalThis.__undercover_workdir}}/artifacts/${{relativePath}}`;
+      if (relativePath.endsWith(".json")) {{
+        return Deno.readTextFileSync(path);
+      }}
       return Deno.readFileSync(path);
     }} catch (_) {{
       return null;
@@ -233,7 +241,8 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {p
         self.worker.run_event_loop(false).await?;
         let value = self.worker.execute_script(
             "undercover:embedded-call-result",
-            format!("JSON.stringify(globalThis.__undercover_result_{id})").into(),
+            format!("globalThis.__undercover_stringify(globalThis.__undercover_result_{id})")
+                .into(),
         )?;
         let json = v8_to_string(&mut self.worker, value)?;
         let response: Value = serde_json::from_str(&json)?;
@@ -329,7 +338,7 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json
   const result = globalThis.__undercover_result_{id};
   if (result === undefined) return "null";
   delete globalThis.__undercover_result_{id};
-  return JSON.stringify(result);
+  return globalThis.__undercover_stringify(result);
 }})()
 "#
             )
@@ -373,6 +382,7 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWo
         sys_traits::impls::RealSys,
     ));
     let artifacts = workdir.join("artifacts").to_string_lossy().to_string();
+    let embedded = workdir.join("embedded").to_string_lossy().to_string();
     let wasm_packages = workdir
         .join("railgun-runtime/node_modules/@railgun-community")
         .to_string_lossy()
@@ -380,7 +390,7 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWo
     let permissions = Permissions::from_options(
         parser.as_ref(),
         &PermissionsOptions {
-            allow_read: Some(vec![artifacts.clone(), wasm_packages]),
+            allow_read: Some(vec![artifacts.clone(), embedded, wasm_packages]),
             allow_write: Some(vec![artifacts]),
             allow_env: Some(vec![
                 "WS_NO_BUFFER_UTIL".to_string(),
@@ -388,6 +398,7 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWo
                 "READABLE_STREAM".to_string(),
                 "NODE_ENV".to_string(),
             ]),
+            allow_sys: Some(vec!["cpus".to_string()]),
             prompt: false,
             ..Default::default()
         },
