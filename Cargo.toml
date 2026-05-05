@@ -18,10 +18,20 @@ arti-client = { version = "0.41", default-features = false, features = ["tokio",
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4.6", features = ["derive", "env"] }
+deno_core = { version = "0.400", optional = true }
+deno_error = { version = "0.7", optional = true }
+deno_runtime = { version = "0.255", features = ["hmr"], optional = true }
 http = "1"
 http-body-util = "0.1"
 hyper = { version = "1.9", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
+# deno_runtime 0.255 pulls ed448-goldilocks 0.14.0-pre.12, which expects
+# elliptic-curve's 0.14.0-rc.31 pkcs8 shape.
+elliptic-curve = { version = "=0.14.0-rc.31", optional = true }
+deno_semver = { version = "0.9.1", optional = true }
+node_resolver = { version = "0.85.0", features = ["sync"], optional = true }
+pkcs8 = { version = "=0.11.0-rc.11", optional = true }
+sys_traits = { version = "=0.1.27", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -36,5 +46,21 @@ url = "2"
 webpki-roots = "0.26"
 zeroize = "1"
 
+[features]
+deno-embed = ["dep:deno_core", "dep:deno_error"]
+deno-runtime = ["dep:deno_error", "dep:deno_runtime", "dep:deno_semver", "dep:elliptic-curve", "dep:node_resolver", "dep:pkcs8", "dep:sys_traits"]
+
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "deno_embed"
+required-features = ["deno-embed"]
+
+[[example]]
+name = "deno_runtime_smoke"
+required-features = ["deno-runtime"]
+
+[[example]]
+name = "deno_runtime_railgun_embed"
+required-features = ["deno-runtime"]

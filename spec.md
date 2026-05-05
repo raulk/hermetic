@@ -18,12 +18,12 @@ supported), a flow that:
 3. Unshields to a fresh EOA.
 
 All RPC and chain-scan traffic in (1)-(3) is routed through Arti.
-Railgun proof generation runs in a Node sidecar container launched
-with Docker `--network none`, `--read-only`, `--cap-drop ALL`, and
-`--security-opt no-new-privileges`. The Rust process communicates with
-the container over stdin/stdout JSON-RPC. This is intentionally a
-process/container boundary for the PoC; embedding Deno or another JS
-runtime can be tried later, but is not the current implementation path.
+Railgun proof generation runs in an embedded `deno_runtime` worker
+inside the Rust process. The worker loads a bundled Railgun SDK runtime,
+has no network permission, and can only read/write the local proving
+artifact tree needed by the SDK. The earlier Docker/Node sidecar remains
+as a fallback and comparison harness, but the active implementation path
+is the embedded Deno runtime.
 
 The end-to-end target chain is the chain on which Railgun's contracts
 are currently deployed for testing. Sepolia is the working assumption,
@@ -32,6 +32,20 @@ be checked before M2 (see Q5). If Sepolia is not actively supported by
 the SDK constants and deployed contracts at implementation time, the
 PoC retargets to whichever testnet Railgun publishes addresses for,
 without changes to the architecture.
+
+### Current implementation status
+
+The checked-in implementation currently supports both runtime boundaries:
+
+- `--embedded` is the active path. Rust embeds Deno, loads
+  `embedded/railgun_runtime.iife.js`, denies network access inside the
+  JS worker, and services SDK reverse JSON-RPC/HTTP requests through
+  Arti. Balance refresh and unshield preflight use Railgun quick-sync
+  GraphQL through Arti, then decrypt balances locally in the embedded
+  worker.
+- The Docker/Node sidecar remains as a fallback/comparison harness. Any
+  lower section that describes `ingest_events` or a Docker-only runtime
+  is historical design context unless it explicitly says `--embedded`.
 
 ## Non-goals
 
@@ -80,20 +94,20 @@ What the system does not hide:
 - Local-machine compromise.
 - DNS leaks from misconfigured runtime code. Mitigated by passing
   hostnames (not pre-resolved IPs) into `TorClient::connect`, which
-  resolves names inside the circuit, plus running the sidecar in a
-  Docker container with `--network none`.
+  resolves names inside the circuit, plus running the embedded Deno
+  worker without network permission.
 
 ## Architecture
 
 ```
-+----------------------------+      stdin (JSON-RPC)    +---------------------------+
-|  Rust binary               |  --------------------->  |  Node sidecar container   |
-|  `undercover`              |  <---------------------  |  Docker --network none    |
-|                            |    stdout (JSON-RPC)     |  --allow-read=ALLOW       |
++----------------------------+      host ops/promises   +---------------------------+
+|  Rust binary               |  --------------------->  |  Embedded Deno worker     |
+|  `undercover`              |  <---------------------  |  no net, narrow fs/env    |
+|                            |    reverse RPC queue     |                           |
 |  - arti_client TorClient   |    stderr (logs)         |                           |
 |  - alloy Provider over     |                          |  npm:@railgun-community/  |
 |    custom hyper connector  |                          |    wallet  (engine)       |
-|  - sidecar driver          |                          |                           |
+|  - embedded runtime driver |                          |                           |
 |  - EOA signer (LocalSigner)|                          |  in-memory:               |
 |  - flow orchestrator       |                          |   - Railgun wallet keys   |
 |  - Railgun event sync      |                          |   - note DB               |
@@ -112,11 +126,11 @@ System boundary invariants:
 
 - Every TCP connection originating from this system enters the network
   through `arti_client::TorClient::connect` inside the Rust process.
-- The sidecar has no container network interface (`docker run
-  --network none`). Attempts to open sockets or call `fetch` fail at
-  runtime.
-- The sidecar therefore cannot do its own scanning; Rust feeds it
-  Railgun event logs over stdio (see § Data flow).
+- The embedded Deno worker is created without network permission.
+  Attempts to open sockets or call Deno `fetch` fail at runtime; the
+  `node:net` smoke path is denied too.
+- The embedded worker therefore cannot do its own scanning; Rust handles
+  SDK reverse JSON-RPC/HTTP requests and executes them through Arti.
 - This is not a complete OS sandbox. A compromised Node runtime or kernel-level
   bypass is out of scope for the PoC; both an OS sandbox and a
   network namespace are tracked as hardening follow-ups.
@@ -280,8 +294,10 @@ Module layout:
 - `src/arti.rs`: Arti bootstrap.
 - `src/transport.rs`: hyper connector backed by Arti.
 - `src/rpc.rs`: alloy provider construction over the custom transport.
+- `src/embedded.rs`: embedded Deno worker, Railgun bundle loader, host
+  artifact operations, Deno permissions, and reverse RPC pump.
 - `src/sidecar.rs`: Docker child process management and JSON-RPC over
-  stdio.
+  stdio. This remains as the fallback/comparison harness.
 - `src/flow.rs`: shield, transfer, unshield orchestration.
 - `src/error.rs`: typed errors.
 
@@ -387,6 +403,41 @@ impl Sidecar {
 }
 ```
 
+```rust
+// src/embedded.rs, behind feature `deno-runtime`
+pub struct EmbeddedRailgun { ... }
+
+impl EmbeddedRailgun {
+    pub async fn new(workdir: &std::path::Path) -> anyhow::Result<Self>;
+    pub async fn call<Req, Res>(
+        &mut self,
+        method: &str,
+        params: Req,
+    ) -> anyhow::Result<Res>
+    where
+        Req: serde::Serialize,
+        Res: serde::de::DeserializeOwned;
+    pub async fn call_with_reverse_rpc<Req, Res>(
+        &mut self,
+        method: &str,
+        params: Req,
+        tor: ArtiClient,
+        rpc_url: http::Uri,
+    ) -> anyhow::Result<Res>
+    where
+        Req: serde::Serialize,
+        Res: serde::de::DeserializeOwned;
+}
+```
+
+`EmbeddedRailgun::new` creates a `deno_runtime::MainWorker`, restricts
+permissions to the artifact directory and required Railgun WASM package
+files, injects host artifact/log/reverse-RPC operations, and loads
+`embedded/railgun_runtime.iife.js`. The bundle is generated from
+`sidecar/runtime.mjs` by `sidecar/build-embedded.mjs`. `call_with_reverse_rpc`
+keeps JavaScript proof generation inside the worker while Rust services
+SDK JSON-RPC and GraphQL requests through Arti.
+
 `spawn` invokes Docker with the exact argv shown in the Sidecar section
 below. `call` writes a single-line JSON-RPC request to stdin, then
 reads exactly one line from stdout and decodes it. `shutdown` closes
@@ -397,16 +448,19 @@ CLI subcommands (`src/main.rs`):
 - `undercover ping --rpc <URL>`: bootstraps Arti, builds provider, calls
   `eth_blockNumber` and `eth_chainId`. Prints both. Verifies that the
   network path works.
-- `undercover sidecar-smoke`: spawns the sidecar, calls the `health`
-  method, prints the response, shuts down.
+- `undercover sidecar-smoke --embedded`: loads the bundled SDK in the
+  embedded Deno worker, calls `health`, then runs the permission smoke.
+  Without `--embedded`, the command exercises the Docker sidecar fallback.
 - `undercover load-wallet-smoke --railgun-mnemonic <BIP39>`:
-  initializes the Railgun wallet in the sidecar and returns the
-  wallet ID plus 0zk address.
+  initializes the Railgun wallet in the active Railgun runtime and
+  returns the wallet ID plus 0zk address. Add `--embedded` for the Deno
+  worker.
 - `undercover shield-base-token --rpc <URL> --private-key <HEX>
   --railgun-mnemonic <BIP39> --amount-wei <wei>`: loads the Railgun
-  wallet, asks the sidecar to populate Sepolia V2 RelayAdapt base-token
-  shield calldata, signs in Rust, and broadcasts through Arti. Add
-  `--dry-run` to stop after calldata construction.
+  wallet, asks the active Railgun runtime to populate Sepolia V2
+  RelayAdapt base-token shield calldata, signs in Rust, and broadcasts
+  through Arti. Add `--embedded` for the Deno worker and `--dry-run` to
+  stop after calldata construction.
 - `undercover signer-address --private-key <HEX>`: prints the EOA
   address to fund before running `shield-base-token`.
 
@@ -1226,16 +1280,16 @@ claim from the spec. L4 enforces this mechanically.
 
 ## Open questions
 
-Q1. **Does the Railgun SDK load in the sidecar boundary?** Resolved
-for the PoC. The active boundary is Node 22 inside Docker, not Deno.
-`sidecar-smoke` returns `node_compat=true`; `load-wallet-smoke`
-initializes a Railgun wallet and returns a 0zk address; the permission
-smoke confirms the container blocks `fetch`, public sockets, loopback
-`node:net`, writes, and broad env access while allowing artifact reads.
+Q1. **Does the Railgun SDK load in the active runtime boundary?**
+Resolved for the PoC. The active boundary is an embedded Deno worker
+loading a bundled Railgun SDK runtime. `sidecar-smoke --embedded`
+returns `node_compat=true` and its permission smoke confirms Deno
+`fetch`, Deno sockets, `node:net`, writes outside artifacts, and broad
+env reads are denied while artifact reads are allowed. `load-wallet-smoke
+--embedded` initializes a Railgun wallet and returns a 0zk address.
 
-The earlier Deno experiment remains useful evidence: Deno's permission
-model did not reliably constrain transitive `node:net` usage for this
-SDK shape, so Deno is not the current PoC runtime.
+The Docker sidecar path still exists as a fallback/comparison harness,
+but it is no longer the only runtime path.
 
 Q2. **Public Railgun broadcaster vs self-broadcast for the private
 transfer?** PoC default: self-broadcast through Arti. Simpler, keeps
@@ -1335,15 +1389,16 @@ load-bearing for everything else.
   verified to produce distinct circuits (smoke test logs Tor
   circuit IDs).
 
-M2. **Network selection + sidecar smoke + Railgun feasibility (Q1 +
+M2. **Network selection + embedded smoke + Railgun feasibility (Q1 +
 Q5 + Q6 closed).** SDK's `NetworkName` constants and Railgun's
 deployments registry are checked first. The active PoC target is
 Ethereum Sepolia through the SDK's `Ethereum_Sepolia` constants. The
-Node sidecar image builds from `sidecar/Dockerfile`, spawns under the
-Docker argv in `src/sidecar.rs`, `health` round-trips via stdio,
-`load_wallet` returns a 0zk address, and `populate_shield_base_token`
-returns V2 RelayAdapt calldata for Sepolia. The sidecar network/write
-permission smoke passes under Docker.
+embedded Deno worker loads `embedded/railgun_runtime.iife.js`, `health`
+round-trips through Rust host calls, `load_wallet` returns a 0zk
+address, and `populate_shield_base_token` returns V2 RelayAdapt calldata
+for Sepolia. The embedded permission smoke passes. The Node sidecar
+image still builds from `sidecar/Dockerfile` and remains available as a
+fallback comparison harness.
 
 M3. **Artifacts loaded against the selected chain.** `load_artifacts`
 succeeds with proving keys downloaded by `fetch_artifacts.ts`.

@@ -17,7 +17,7 @@ spike:
     cargo test --release --test spike_connector_counter
 
 check-static:
-    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src sidecar examples tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v "sidecar/main\\.mjs:.*fetch\\('https://example.com'\\)" && exit 1 || true
+    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src sidecar examples tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v "sidecar/main\\.mjs:.*fetch\\('https://example.com'\\)" | rg -v '__undercover_deno_fetch\("https://example\.com"\)' && exit 1 || true
     cargo clippy --all-targets -- -D warnings
 
 ping rpc:
@@ -51,3 +51,22 @@ shield-base-token-dry-run amount_wei rpc="https://ethereum-sepolia-rpc.publicnod
 refresh-balance creation_block="0" rpc="https://ethereum-sepolia-rpc.publicnode.com":
     docker build -t undercover-sidecar:dev sidecar
     cargo run --release -- refresh-balance --rpc {{rpc}} --creation-block {{creation_block}}
+
+deno-embed-smoke:
+    cargo run --features deno-embed --example deno_embed
+
+embedded-bundle:
+    cd sidecar && npm run bundle:embedded
+
+embedded-smoke:
+    cd sidecar && npm run bundle:embedded
+    cargo run --features deno-runtime -- sidecar-smoke --embedded
+    cargo run --features deno-runtime -- load-wallet-smoke --embedded --railgun-mnemonic "test test test test test test test test test test test junk"
+
+embedded-check:
+    cargo fmt --check
+    cd sidecar && npm run bundle:embedded
+    cargo run --features deno-embed --example deno_embed
+    cargo run --features deno-runtime --example deno_runtime_smoke
+    cargo run --features deno-runtime -- sidecar-smoke --embedded
+    cargo clippy --features deno-runtime --all-targets -- -D warnings

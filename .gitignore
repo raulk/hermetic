@@ -6,6 +6,10 @@
 /.env
 *.log
 
+# Embedded runtime bundles are generated from sidecar/runtime.mjs.
+/embedded/*.bundle.mjs
+/embedded/*.iife.js
+
 # Railgun proving artifacts are downloaded/cacheable and large.
 /artifacts/*
 !/artifacts/manifest

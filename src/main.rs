@@ -7,6 +7,10 @@ use alloy_rpc_types_eth::TransactionRequest;
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context as _;
 use clap::{Parser, Subcommand};
+#[cfg(feature = "deno-runtime")]
+use undercover::embedded::EmbeddedRailgun;
+#[cfg(feature = "deno-runtime")]
+use undercover::sidecar::PermissionSmoke;
 use undercover::{
     arti::{self, IsolationLabel},
     rpc,
@@ -43,10 +47,16 @@ enum Command {
     SidecarSmoke {
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
+        #[cfg(feature = "deno-runtime")]
+        #[arg(long)]
+        embedded: bool,
     },
     LoadWalletSmoke {
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
+        #[cfg(feature = "deno-runtime")]
+        #[arg(long)]
+        embedded: bool,
         #[arg(long, env = "UNDERCOVER_RAILGUN_MNEMONIC")]
         railgun_mnemonic: String,
         #[arg(
@@ -64,6 +74,9 @@ enum Command {
         rpc: http::Uri,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
+        #[cfg(feature = "deno-runtime")]
+        #[arg(long)]
+        embedded: bool,
         #[arg(long, default_value = "./.arti/state")]
         arti_state: PathBuf,
         #[arg(long, default_value = "./.arti/cache")]
@@ -87,6 +100,9 @@ enum Command {
         rpc: http::Uri,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
+        #[cfg(feature = "deno-runtime")]
+        #[arg(long)]
+        embedded: bool,
         #[arg(long, default_value = "./.arti/state")]
         arti_state: PathBuf,
         #[arg(long, default_value = "./.arti/cache")]
@@ -106,6 +122,9 @@ enum Command {
         rpc: http::Uri,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
+        #[cfg(feature = "deno-runtime")]
+        #[arg(long)]
+        embedded: bool,
         #[arg(long, default_value = "./.arti/state")]
         arti_state: PathBuf,
         #[arg(long, default_value = "./.arti/cache")]
@@ -130,7 +149,7 @@ enum Command {
     },
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -159,7 +178,45 @@ async fn main() -> anyhow::Result<()> {
                 "provider call completed without ArtiConnector use"
             );
         }
-        Command::SidecarSmoke { workdir } => {
+        Command::SidecarSmoke {
+            workdir,
+            #[cfg(feature = "deno-runtime")]
+            embedded,
+        } => {
+            #[cfg(feature = "deno-runtime")]
+            if embedded {
+                let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                    .context("binding local permission probe socket")?;
+                let node_net_port = listener.local_addr()?.port();
+                let mut runtime = EmbeddedRailgun::new(&workdir).await?;
+                let health: Health = runtime.call("health", serde_json::json!({})).await?;
+                println!("sdk_version={}", health.sdk_version);
+                println!("shared_models_version={}", health.shared_models_version);
+                println!("node_compat={}", health.node_compat);
+                anyhow::ensure!(health.node_compat, "embedded SDK imports did not load");
+                let smoke: PermissionSmoke = runtime
+                    .call(
+                        "sidecar-permissions-smoke",
+                        serde_json::json!({ "node_net_port": node_net_port }),
+                    )
+                    .await?;
+                println!("fetch_denied={}", smoke.fetch_denied);
+                println!("connect_denied={}", smoke.connect_denied);
+                println!("node_net_denied={}", smoke.node_net_denied);
+                println!("write_denied={}", smoke.write_denied);
+                println!("env_denied={}", smoke.env_denied);
+                println!("read_allowed={}", smoke.read_allowed);
+                anyhow::ensure!(smoke.fetch_denied, "embedded Deno fetch was not denied");
+                anyhow::ensure!(smoke.connect_denied, "embedded Deno connect was not denied");
+                anyhow::ensure!(smoke.node_net_denied, "embedded node:net was not denied");
+                anyhow::ensure!(
+                    smoke.write_denied,
+                    "embedded write outside artifacts was not denied"
+                );
+                anyhow::ensure!(smoke.env_denied, "embedded broad env read was not denied");
+                anyhow::ensure!(smoke.read_allowed, "embedded artifact read was denied");
+                return Ok(());
+            }
             let mut sidecar = Sidecar::spawn(&workdir).await?;
             let health: Health = sidecar.call("health", serde_json::json!({})).await?;
             println!("sdk_version={}", health.sdk_version);
@@ -170,9 +227,31 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::LoadWalletSmoke {
             workdir,
+            #[cfg(feature = "deno-runtime")]
+            embedded,
             railgun_mnemonic,
             encryption_key,
         } => {
+            #[cfg(feature = "deno-runtime")]
+            if embedded {
+                let mut runtime = EmbeddedRailgun::new(&workdir).await?;
+                let wallet: LoadedWallet = runtime
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                        }),
+                    )
+                    .await?;
+                println!("wallet_id={}", wallet.wallet_id);
+                println!("shielded_address={}", wallet.shielded_address);
+                anyhow::ensure!(
+                    wallet.shielded_address.starts_with("0zk"),
+                    "embedded runtime returned non-Railgun address"
+                );
+                return Ok(());
+            }
             let mut sidecar = Sidecar::spawn(&workdir).await?;
             let wallet: LoadedWallet = sidecar
                 .call(
@@ -199,6 +278,8 @@ async fn main() -> anyhow::Result<()> {
         Command::ShieldBaseToken {
             rpc,
             workdir,
+            #[cfg(feature = "deno-runtime")]
+            embedded,
             arti_state,
             arti_cache,
             private_key,
@@ -209,26 +290,75 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let private_key: PrivateKeySigner =
                 private_key.parse().context("parsing private key")?;
-            let mut sidecar = Sidecar::spawn(&workdir).await?;
-            let wallet: LoadedWallet = sidecar
-                .call(
-                    "load_wallet",
-                    serde_json::json!({
-                        "mnemonic": railgun_mnemonic,
-                        "encryption_key": encryption_key,
-                    }),
-                )
-                .await?;
-            let populated: PopulatedTransaction = sidecar
-                .call(
-                    "populate_shield_base_token",
-                    serde_json::json!({
-                        "railgun_address": wallet.shielded_address,
-                        "amount_wei": amount_wei.to_string(),
-                    }),
-                )
-                .await?;
-            sidecar.shutdown().await?;
+            #[cfg(feature = "deno-runtime")]
+            let (wallet, populated) = if embedded {
+                let mut runtime = EmbeddedRailgun::new(&workdir).await?;
+                let wallet: LoadedWallet = runtime
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = runtime
+                    .call(
+                        "populate_shield_base_token",
+                        serde_json::json!({
+                            "railgun_address": wallet.shielded_address,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                    )
+                    .await?;
+                (wallet, populated)
+            } else {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = sidecar
+                    .call(
+                        "populate_shield_base_token",
+                        serde_json::json!({
+                            "railgun_address": wallet.shielded_address,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                    )
+                    .await?;
+                sidecar.shutdown().await?;
+                (wallet, populated)
+            };
+            #[cfg(not(feature = "deno-runtime"))]
+            let (wallet, populated) = {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = sidecar
+                    .call(
+                        "populate_shield_base_token",
+                        serde_json::json!({
+                            "railgun_address": wallet.shielded_address,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                    )
+                    .await?;
+                sidecar.shutdown().await?;
+                (wallet, populated)
+            };
 
             let to: Address = populated.to.parse().context("parsing sidecar tx.to")?;
             let data: Bytes = populated.data.parse().context("parsing sidecar tx.data")?;
@@ -280,6 +410,8 @@ async fn main() -> anyhow::Result<()> {
         Command::RefreshBalance {
             rpc,
             workdir,
+            #[cfg(feature = "deno-runtime")]
+            embedded,
             arti_state,
             arti_cache,
             railgun_mnemonic,
@@ -288,32 +420,96 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let tor = arti::bootstrap(&arti_state, &arti_cache).await?;
             let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
-            let mut sidecar = Sidecar::spawn(&workdir).await?;
-            let wallet: LoadedWallet = sidecar
-                .call(
-                    "load_wallet",
-                    serde_json::json!({
-                        "mnemonic": railgun_mnemonic,
-                        "encryption_key": encryption_key,
-                        "creation_block_numbers": {
-                            "Ethereum_Sepolia": creation_block,
-                        },
-                    }),
+            #[cfg(feature = "deno-runtime")]
+            let (wallet, refreshed) = if embedded {
+                let mut runtime = EmbeddedRailgun::new(&workdir).await?;
+                let wallet: LoadedWallet = runtime
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let refreshed: RefreshedBalance = tokio::time::timeout(
+                    std::time::Duration::from_secs(180),
+                    runtime.call_with_reverse_rpc(
+                        "refresh_balance",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                        }),
+                        tor,
+                        rpc,
+                    ),
                 )
-                .await?;
-            let refreshed: RefreshedBalance = tokio::time::timeout(
-                std::time::Duration::from_secs(180),
-                sidecar.call_with_reverse_rpc(
-                    "refresh_balance",
-                    serde_json::json!({
-                        "wallet_id": wallet.wallet_id,
-                    }),
-                    tor,
-                    rpc,
-                ),
-            )
-            .await
-            .context("timed out refreshing Railgun balance")??;
+                .await
+                .context("timed out refreshing Railgun balance")??;
+                (wallet, refreshed)
+            } else {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let refreshed: RefreshedBalance = tokio::time::timeout(
+                    std::time::Duration::from_secs(180),
+                    sidecar.call_with_reverse_rpc(
+                        "refresh_balance",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                        }),
+                        tor,
+                        rpc,
+                    ),
+                )
+                .await
+                .context("timed out refreshing Railgun balance")??;
+                sidecar.shutdown().await?;
+                (wallet, refreshed)
+            };
+            #[cfg(not(feature = "deno-runtime"))]
+            let (wallet, refreshed) = {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let refreshed: RefreshedBalance = tokio::time::timeout(
+                    std::time::Duration::from_secs(180),
+                    sidecar.call_with_reverse_rpc(
+                        "refresh_balance",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                        }),
+                        tor,
+                        rpc,
+                    ),
+                )
+                .await
+                .context("timed out refreshing Railgun balance")??;
+                sidecar.shutdown().await?;
+                (wallet, refreshed)
+            };
             println!("wallet_id={}", wallet.wallet_id);
             println!("shielded_address={}", wallet.shielded_address);
             println!("token_address={}", refreshed.token_address);
@@ -322,11 +518,12 @@ async fn main() -> anyhow::Result<()> {
             let calls = ARTI_CONNECT_CALLS.load(Ordering::SeqCst);
             println!("arti_connect_calls={calls}");
             anyhow::ensure!(calls > 0, "refresh completed without ArtiConnector use");
-            sidecar.shutdown().await?;
         }
         Command::UnshieldBaseToken {
             rpc,
             workdir,
+            #[cfg(feature = "deno-runtime")]
+            embedded,
             arti_state,
             arti_cache,
             private_key,
@@ -343,35 +540,105 @@ async fn main() -> anyhow::Result<()> {
             let recipient = recipient.unwrap_or_else(|| from.to_string());
             let tor = arti::bootstrap(&arti_state, &arti_cache).await?;
             let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
-            let mut sidecar = Sidecar::spawn(&workdir).await?;
-            let wallet: LoadedWallet = sidecar
-                .call(
-                    "load_wallet",
-                    serde_json::json!({
-                        "mnemonic": railgun_mnemonic,
-                        "encryption_key": encryption_key,
-                        "creation_block_numbers": {
-                            "Ethereum_Sepolia": creation_block,
-                        },
-                    }),
+            #[cfg(feature = "deno-runtime")]
+            let (wallet, populated) = if embedded {
+                let mut runtime = EmbeddedRailgun::new(&workdir).await?;
+                let wallet: LoadedWallet = runtime
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = tokio::time::timeout(
+                    std::time::Duration::from_secs(900),
+                    runtime.call_with_reverse_rpc(
+                        "populate_unshield_base_token",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                            "public_wallet_address": recipient,
+                            "encryption_key": encryption_key,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                        tor.clone(),
+                        rpc.clone(),
+                    ),
                 )
-                .await?;
-            let populated: PopulatedTransaction = tokio::time::timeout(
-                std::time::Duration::from_secs(900),
-                sidecar.call_with_reverse_rpc(
-                    "populate_unshield_base_token",
-                    serde_json::json!({
-                        "wallet_id": wallet.wallet_id,
-                        "public_wallet_address": recipient,
-                        "encryption_key": encryption_key,
-                        "amount_wei": amount_wei.to_string(),
-                    }),
-                    tor.clone(),
-                    rpc.clone(),
-                ),
-            )
-            .await
-            .context("timed out proving Railgun unshield")??;
+                .await
+                .context("timed out proving Railgun unshield")??;
+                (wallet, populated)
+            } else {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = tokio::time::timeout(
+                    std::time::Duration::from_secs(900),
+                    sidecar.call_with_reverse_rpc(
+                        "populate_unshield_base_token",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                            "public_wallet_address": recipient,
+                            "encryption_key": encryption_key,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                        tor.clone(),
+                        rpc.clone(),
+                    ),
+                )
+                .await
+                .context("timed out proving Railgun unshield")??;
+                sidecar.shutdown().await?;
+                (wallet, populated)
+            };
+            #[cfg(not(feature = "deno-runtime"))]
+            let (wallet, populated) = {
+                let mut sidecar = Sidecar::spawn(&workdir).await?;
+                let wallet: LoadedWallet = sidecar
+                    .call(
+                        "load_wallet",
+                        serde_json::json!({
+                            "mnemonic": railgun_mnemonic,
+                            "encryption_key": encryption_key,
+                            "creation_block_numbers": {
+                                "Ethereum_Sepolia": creation_block,
+                            },
+                        }),
+                    )
+                    .await?;
+                let populated: PopulatedTransaction = tokio::time::timeout(
+                    std::time::Duration::from_secs(900),
+                    sidecar.call_with_reverse_rpc(
+                        "populate_unshield_base_token",
+                        serde_json::json!({
+                            "wallet_id": wallet.wallet_id,
+                            "public_wallet_address": recipient,
+                            "encryption_key": encryption_key,
+                            "amount_wei": amount_wei.to_string(),
+                        }),
+                        tor.clone(),
+                        rpc.clone(),
+                    ),
+                )
+                .await
+                .context("timed out proving Railgun unshield")??;
+                sidecar.shutdown().await?;
+                (wallet, populated)
+            };
             println!("wallet_id={}", wallet.wallet_id);
             println!("shielded_address={}", wallet.shielded_address);
             println!("to={}", populated.to);
@@ -386,8 +653,6 @@ async fn main() -> anyhow::Result<()> {
                 calls > 0,
                 "unshield proof completed without ArtiConnector use"
             );
-            sidecar.shutdown().await?;
-
             if dry_run {
                 return Ok(());
             }
