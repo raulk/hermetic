@@ -1,4 +1,4 @@
-use alloy_network::{Ethereum, EthereumWallet};
+use alloy_network::{Ethereum, NetworkWallet};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
 use alloy_rpc_client::RpcClient;
 use anyhow::{anyhow, Context as _};
@@ -25,7 +25,7 @@ pub fn provider(tor: ArtiClient, rpc_url: Uri) -> RootProvider<Ethereum> {
 pub fn wallet_provider(
     tor: ArtiClient,
     rpc_url: Uri,
-    wallet: EthereumWallet,
+    wallet: impl NetworkWallet<Ethereum> + Clone + 'static,
 ) -> impl Provider<Ethereum> {
     let transport = ArtiJsonRpcTransport::new(rpc_url, tor);
     let client = RpcClient::builder().transport(transport, false);

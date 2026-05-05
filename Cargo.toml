@@ -11,6 +11,7 @@ alloy-provider = { version = "2.0.4", default-features = false }
 alloy-primitives = { version = "1.5.7", default-features = false, features = ["std"] }
 alloy-rpc-client = { version = "2.0.4", default-features = false }
 alloy-rpc-types-eth = { version = "2.0.4", default-features = false }
+alloy-signer-ledger = { version = "2.0.4", features = ["node"] }
 alloy-signer-local = { version = "2.0.4", default-features = false }
 alloy-transport = { version = "2.0.4", default-features = false }
 anyhow = "1"
@@ -52,15 +53,3 @@ deno-runtime = ["dep:deno_error", "dep:deno_runtime", "dep:deno_semver", "dep:el
 
 [dev-dependencies]
 tempfile = "3"
-
-[[example]]
-name = "deno_embed"
-required-features = ["deno-embed"]
-
-[[example]]
-name = "deno_runtime_smoke"
-required-features = ["deno-runtime"]
-
-[[example]]
-name = "deno_runtime_railgun_embed"
-required-features = ["deno-runtime"]

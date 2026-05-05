@@ -52,9 +52,6 @@ refresh-balance creation_block="0" rpc="https://ethereum-sepolia-rpc.publicnode.
     docker build -t undercover-sidecar:dev sidecar
     cargo run --release -- refresh-balance --rpc {{rpc}} --creation-block {{creation_block}}
 
-deno-embed-smoke:
-    cargo run --features deno-embed --example deno_embed
-
 embedded-bundle:
     cd sidecar && npm run bundle:embedded
 
@@ -66,7 +63,5 @@ embedded-smoke:
 embedded-check:
     cargo fmt --check
     cd sidecar && npm run bundle:embedded
-    cargo run --features deno-embed --example deno_embed
-    cargo run --features deno-runtime --example deno_runtime_smoke
     cargo run --features deno-runtime -- sidecar-smoke --embedded
     cargo clippy --features deno-runtime --all-targets -- -D warnings

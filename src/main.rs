@@ -1,12 +1,13 @@
 use std::{path::PathBuf, sync::atomic::Ordering};
 
-use alloy_network::EthereumWallet;
+use alloy_network::{Ethereum, EthereumWallet, NetworkWallet};
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types_eth::TransactionRequest;
+use alloy_signer_ledger::{HDPath, LedgerSigner};
 use alloy_signer_local::PrivateKeySigner;
 use anyhow::Context as _;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 #[cfg(feature = "deno-runtime")]
 use undercover::embedded::EmbeddedRailgun;
 #[cfg(feature = "deno-runtime")]
@@ -66,8 +67,8 @@ enum Command {
         encryption_key: String,
     },
     SignerAddress {
-        #[arg(long, env = "UNDERCOVER_PRIVATE_KEY")]
-        private_key: String,
+        #[command(flatten)]
+        signer: PublicSignerArgs,
     },
     ShieldBaseToken {
         #[arg(long)]
@@ -81,8 +82,8 @@ enum Command {
         arti_state: PathBuf,
         #[arg(long, default_value = "./.arti/cache")]
         arti_cache: PathBuf,
-        #[arg(long, env = "UNDERCOVER_PRIVATE_KEY")]
-        private_key: String,
+        #[command(flatten)]
+        signer: PublicSignerArgs,
         #[arg(long, env = "UNDERCOVER_RAILGUN_MNEMONIC")]
         railgun_mnemonic: String,
         #[arg(
@@ -129,8 +130,8 @@ enum Command {
         arti_state: PathBuf,
         #[arg(long, default_value = "./.arti/cache")]
         arti_cache: PathBuf,
-        #[arg(long, env = "UNDERCOVER_PRIVATE_KEY")]
-        private_key: String,
+        #[command(flatten)]
+        signer: PublicSignerArgs,
         #[arg(long, env = "UNDERCOVER_RAILGUN_MNEMONIC")]
         railgun_mnemonic: String,
         #[arg(
@@ -147,6 +148,46 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Clone, Debug, Args)]
+struct PublicSignerArgs {
+    #[arg(long, env = "UNDERCOVER_PRIVATE_KEY", conflicts_with = "ledger")]
+    private_key: Option<String>,
+    #[arg(long)]
+    ledger: bool,
+    #[arg(long, default_value_t = 11155111)]
+    chain_id: u64,
+    #[arg(long, default_value_t = 0)]
+    ledger_index: usize,
+    #[arg(long)]
+    ledger_path: Option<String>,
+}
+
+impl PublicSignerArgs {
+    async fn wallet(&self) -> anyhow::Result<EthereumWallet> {
+        if let Some(private_key) = &self.private_key {
+            let signer: PrivateKeySigner = private_key.parse().context("parsing private key")?;
+            return Ok(EthereumWallet::from(signer));
+        }
+        anyhow::ensure!(
+            self.ledger,
+            "choose a public signer with --private-key/UNDERCOVER_PRIVATE_KEY or --ledger"
+        );
+        let path = self
+            .ledger_path
+            .as_ref()
+            .map(|path| HDPath::Other(path.clone()))
+            .unwrap_or(HDPath::LedgerLive(self.ledger_index));
+        let signer = LedgerSigner::new(path, Some(self.chain_id))
+            .await
+            .context("connecting to Ledger Ethereum app")?;
+        Ok(EthereumWallet::from(signer))
+    }
+}
+
+fn default_signer_address(wallet: &EthereumWallet) -> Address {
+    <EthereumWallet as NetworkWallet<Ethereum>>::default_signer_address(wallet)
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -270,10 +311,9 @@ async fn main() -> anyhow::Result<()> {
             );
             sidecar.shutdown().await?;
         }
-        Command::SignerAddress { private_key } => {
-            let private_key: PrivateKeySigner =
-                private_key.parse().context("parsing private key")?;
-            println!("address={}", private_key.address());
+        Command::SignerAddress { signer } => {
+            let wallet = signer.wallet().await?;
+            println!("address={}", default_signer_address(&wallet));
         }
         Command::ShieldBaseToken {
             rpc,
@@ -282,16 +322,15 @@ async fn main() -> anyhow::Result<()> {
             embedded,
             arti_state,
             arti_cache,
-            private_key,
+            signer,
             railgun_mnemonic,
             encryption_key,
             amount_wei,
             dry_run,
         } => {
-            let private_key: PrivateKeySigner =
-                private_key.parse().context("parsing private key")?;
+            let public_wallet = signer.wallet().await?;
             #[cfg(feature = "deno-runtime")]
-            let (wallet, populated) = if embedded {
+            let (railgun_wallet, populated) = if embedded {
                 let mut runtime = EmbeddedRailgun::new(&workdir).await?;
                 let wallet: LoadedWallet = runtime
                     .call(
@@ -336,7 +375,7 @@ async fn main() -> anyhow::Result<()> {
                 (wallet, populated)
             };
             #[cfg(not(feature = "deno-runtime"))]
-            let (wallet, populated) = {
+            let (railgun_wallet, populated) = {
                 let mut sidecar = Sidecar::spawn(&workdir).await?;
                 let wallet: LoadedWallet = sidecar
                     .call(
@@ -365,22 +404,21 @@ async fn main() -> anyhow::Result<()> {
             let value =
                 U256::from_str_radix(&populated.value, 10).context("parsing sidecar tx.value")?;
 
-            println!("wallet_id={}", wallet.wallet_id);
-            println!("shielded_address={}", wallet.shielded_address);
+            println!("wallet_id={}", railgun_wallet.wallet_id);
+            println!("shielded_address={}", railgun_wallet.shielded_address);
             println!("to={to}");
             println!("value={value}");
             println!("data_len={}", data.len());
-            let from = private_key.address();
+            let from = default_signer_address(&public_wallet);
             println!("from={from}");
 
             if dry_run {
                 return Ok(());
             }
 
-            let wallet = EthereumWallet::from(private_key);
             let tor = arti::bootstrap(&arti_state, &arti_cache).await?;
             let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
-            let provider = rpc::wallet_provider(tor, rpc, wallet);
+            let provider = rpc::wallet_provider(tor, rpc, public_wallet);
             let balance = provider
                 .get_balance(from)
                 .await
@@ -526,7 +564,7 @@ async fn main() -> anyhow::Result<()> {
             embedded,
             arti_state,
             arti_cache,
-            private_key,
+            signer,
             railgun_mnemonic,
             encryption_key,
             amount_wei,
@@ -534,14 +572,13 @@ async fn main() -> anyhow::Result<()> {
             creation_block,
             dry_run,
         } => {
-            let private_key: PrivateKeySigner =
-                private_key.parse().context("parsing private key")?;
-            let from = private_key.address();
+            let public_wallet = signer.wallet().await?;
+            let from = default_signer_address(&public_wallet);
             let recipient = recipient.unwrap_or_else(|| from.to_string());
             let tor = arti::bootstrap(&arti_state, &arti_cache).await?;
             let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
             #[cfg(feature = "deno-runtime")]
-            let (wallet, populated) = if embedded {
+            let (railgun_wallet, populated) = if embedded {
                 let mut runtime = EmbeddedRailgun::new(&workdir).await?;
                 let wallet: LoadedWallet = runtime
                     .call(
@@ -606,7 +643,7 @@ async fn main() -> anyhow::Result<()> {
                 (wallet, populated)
             };
             #[cfg(not(feature = "deno-runtime"))]
-            let (wallet, populated) = {
+            let (railgun_wallet, populated) = {
                 let mut sidecar = Sidecar::spawn(&workdir).await?;
                 let wallet: LoadedWallet = sidecar
                     .call(
@@ -639,8 +676,8 @@ async fn main() -> anyhow::Result<()> {
                 sidecar.shutdown().await?;
                 (wallet, populated)
             };
-            println!("wallet_id={}", wallet.wallet_id);
-            println!("shielded_address={}", wallet.shielded_address);
+            println!("wallet_id={}", railgun_wallet.wallet_id);
+            println!("shielded_address={}", railgun_wallet.shielded_address);
             println!("to={}", populated.to);
             println!("value={}", populated.value);
             println!("data_len={}", populated.data.len() / 2);
@@ -661,8 +698,7 @@ async fn main() -> anyhow::Result<()> {
             let data: Bytes = populated.data.parse().context("parsing sidecar tx.data")?;
             let value =
                 U256::from_str_radix(&populated.value, 10).context("parsing sidecar tx.value")?;
-            let wallet = EthereumWallet::from(private_key);
-            let provider = rpc::wallet_provider(tor, rpc, wallet);
+            let provider = rpc::wallet_provider(tor, rpc, public_wallet);
             let balance = provider
                 .get_balance(from)
                 .await
