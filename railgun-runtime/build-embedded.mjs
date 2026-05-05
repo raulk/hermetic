@@ -18,29 +18,8 @@ const outputs = [
   },
 ];
 
-function wasmPath(packageName, filename) {
-  return JSON.stringify(
-    path.join(
-      import.meta.dirname,
-      'node_modules',
-      '@railgun-community',
-      packageName,
-      'pkg-cjs',
-      filename,
-    ),
-  );
-}
-
-async function patchWasmDirname(outfile) {
+async function patchNativeAddons(outfile) {
   let source = await fs.readFile(outfile, 'utf8');
-  source = source.replace(
-    /__require\("path"\)\.join\(__dirname, "poseidon_hash_wasm_bg\.wasm"\)/g,
-    wasmPath('poseidon-hash-wasm', 'poseidon_hash_wasm_bg.wasm'),
-  );
-  source = source.replace(
-    /__require\("path"\)\.join\(__dirname, "curve25519_scalarmult_wasm_bg\.wasm"\)/g,
-    wasmPath('curve25519-scalarmult-wasm', 'curve25519_scalarmult_wasm_bg.wasm'),
-  );
   source = source.replace(
     /module\.exports = require_api\(\)\(require_node_gyp_build2\(\)\(__dirname\)\);/g,
     'throw new Error("native blake-hash binding disabled for embedded runtime");',
@@ -57,6 +36,10 @@ for (const output of outputs) {
     format: output.format,
     globalName: output.globalName,
     outfile: output.outfile,
+    external: [
+      '@railgun-community/poseidon-hash-wasm',
+      '@railgun-community/curve25519-scalarmult-wasm',
+    ],
   });
-  await patchWasmDirname(output.outfile);
+  await patchNativeAddons(output.outfile);
 }

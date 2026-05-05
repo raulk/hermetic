@@ -6,9 +6,8 @@
   JavaScript must not own network egress. The embedded worker should keep
   Deno network permissions denied and ask Rust to service JSON-RPC/HTTP
   through Tor.
-- Treat `sidecar/runtime.mjs` as the shared Railgun runtime surface.
-  `sidecar/main.mjs` is the Docker fallback adapter; `src/embedded.rs` is
-  the embedded Deno adapter.
+- Treat `railgun-runtime/runtime.mjs` as the shared Railgun runtime surface.
+  `src/embedded.rs` is the embedded Deno adapter.
 - Arti is a Rust crate integration point, not a ready-made JS FFI binding.
   Node, Deno, or Bun could call a custom C/N-API shim, but that would be a
   new native binding surface maintained here. Prefer Rust-owned Tor via Arti plus
@@ -33,9 +32,8 @@
 ## Verification
 
 - Production verification should be CLI-level, not example-level:
-  `sidecar-smoke --embedded`, `load-wallet-smoke --embedded`,
-  `shield-base-token --embedded --dry-run`, `refresh-balance --embedded`,
-  and unshield preflight.
+  `runtime-smoke`, `load-wallet`, `shield --dry-run`, `balance`, and
+  unshield preflight.
 - `refresh_balance` and unshield preflight should complete via Railgun
   quick-sync GraphQL over Tor plus local balance decryption. Avoid the SDK
   slow `eth_getLogs` scan from deployment block; it can time out against
@@ -44,7 +42,7 @@
   `Deno.connect`, `node:net`, writes outside artifacts, and broad env reads
   should be denied, while artifact reads should be allowed.
 - Generated bundles under `embedded/` are build outputs from
-  `sidecar/build-embedded.mjs`; do not commit them.
+  `railgun-runtime/build-embedded.mjs`; do not commit them.
 
 ## Wayfinding
 

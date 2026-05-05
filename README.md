@@ -1,13 +1,9 @@
 # Undercover
 
 Undercover is a proof of concept for Railgun transactions whose network
-egress is owned by Rust and routed through Tor. The current active path
-keeps everything in one process: Rust embeds Deno for the Railgun SDK, denies
-network access inside JavaScript, and services SDK JSON-RPC/HTTP requests
-through Tor.
-
-The Docker/Node sidecar is still present as a fallback and comparison harness,
-but it is no longer the preferred runtime boundary.
+egress is owned by Rust and routed through Tor. Rust embeds Deno for the
+Railgun SDK, denies network access inside JavaScript, and services SDK
+JSON-RPC/HTTP requests through Tor.
 
 ## Architecture
 
@@ -21,14 +17,12 @@ Rust CLI
 ```
 
 The embedded worker loads `embedded/railgun_runtime.iife.js`, generated from
-`sidecar/runtime.mjs`. JavaScript cannot open sockets or use ambient fetch.
-When the Railgun SDK needs JSON-RPC or GraphQL, it emits a reverse request to
-Rust; Rust performs the request through Tor.
+`railgun-runtime/runtime.mjs`. JavaScript cannot open sockets or use ambient
+fetch. When the Railgun SDK needs JSON-RPC or GraphQL, it emits a reverse
+request to Rust; Rust performs the request through Tor.
 
-Railgun quick-sync uses:
-
+Railgun quick-sync uses
 `https://rail-squid.squids.live/squid-railgun-eth-sepolia-v2/graphql`
-
 through the same Tor reverse-HTTP path.
 
 ## Requirements
@@ -36,65 +30,41 @@ through the same Tor reverse-HTTP path.
 - Rust 1.91+
 - Node/npm for bundling the Railgun runtime
 - `just` for the documented recipes
-- Docker only if you want to exercise the legacy sidecar path
 
 Install JS dependencies:
 
 ```sh
-cd sidecar
+cd railgun-runtime
 npm install
 ```
 
 Generate the embedded Railgun bundle:
 
 ```sh
-just embedded-bundle
+just runtime-bundle
 ```
 
 The generated `embedded/` files are build outputs and are intentionally not
 committed.
 
-## Quick Checks
-
-Embedded smoke:
+## Checks
 
 ```sh
-just embedded-smoke
-```
-
-Full embedded check:
-
-```sh
+just runtime-smoke
 just embedded-check
-```
-
-Static egress check:
-
-```sh
 just check-static
 ```
 
-The embedded smoke verifies:
+The runtime smoke verifies that the Railgun SDK loads under embedded Deno and
+that Deno `fetch`, `Deno.connect`, `node:net`, writes outside artifacts, and
+broad env reads are denied while artifact reads are allowed.
 
-- Railgun SDK loads under embedded Deno.
-- Deno `fetch` is denied.
-- `Deno.connect` is denied.
-- `node:net` is denied.
-- writes outside artifacts are denied.
-- broad env reads are denied.
-- artifact reads are allowed.
+## Commands
 
-## Common Commands
-
-Check the signer address:
+Check the public signer address:
 
 ```sh
 cargo run -- signer-address --private-key "$UNDERCOVER_PRIVATE_KEY"
-```
-
-Or use a Ledger for the public gas-payer account:
-
-```sh
 cargo run -- signer-address --ledger
 ```
 
@@ -114,23 +84,18 @@ Ping an RPC endpoint through Tor:
 cargo run -- ping --rpc https://ethereum-sepolia-rpc.publicnode.com
 ```
 
-Load a Railgun wallet in the embedded runtime:
+Load a Railgun wallet:
 
 ```sh
-cargo run --features deno-runtime -- \
-  load-wallet-smoke \
-  --embedded \
+cargo run -- load-wallet \
   --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
 ```
 
 Populate a Sepolia base-token shield transaction without broadcasting:
 
 ```sh
-cargo run --features deno-runtime -- \
-  shield-base-token \
-  --embedded \
+cargo run -- shield \
   --dry-run \
-  --rpc https://ethereum-sepolia-rpc.publicnode.com \
   --amount-wei 1 \
   --ledger \
   --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
@@ -139,10 +104,7 @@ cargo run --features deno-runtime -- \
 Refresh private balance through Tor:
 
 ```sh
-cargo run --features deno-runtime -- \
-  refresh-balance \
-  --embedded \
-  --rpc https://ethereum-sepolia-rpc.publicnode.com \
+cargo run -- balance \
   --creation-block <wallet-creation-block> \
   --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
 ```
@@ -150,44 +112,33 @@ cargo run --features deno-runtime -- \
 Populate an unshield transaction without broadcasting:
 
 ```sh
-cargo run --features deno-runtime -- \
-  unshield-base-token \
-  --embedded \
+cargo run -- unshield \
   --dry-run \
-  --rpc https://ethereum-sepolia-rpc.publicnode.com \
   --creation-block <wallet-creation-block> \
   --amount-wei 1 \
   --ledger \
   --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
 ```
 
-## Legacy Sidecar
-
-The Docker sidecar recipes remain available:
-
-```sh
-just check-sidecar
-just sidecar-smoke
-```
-
-Use these only to compare behavior against the older boundary. New work should
-prefer the embedded path unless the goal explicitly changes.
-
 ## Repository Map
 
+- `src/main.rs`: process setup and CLI dispatch.
+- `src/cli.rs`: clap command and argument definitions.
+- `src/commands.rs`: command handlers.
+- `src/railgun.rs`: typed Railgun runtime API over embedded Deno.
 - `src/embedded.rs`: embedded Deno worker and reverse-RPC pump.
 - `src/transport.rs`: Tor-backed hyper connector.
 - `src/rpc.rs`: Alloy provider construction over Arti.
-- `src/main.rs`: CLI orchestration.
-- `sidecar/runtime.mjs`: shared Railgun runtime logic.
-- `sidecar/main.mjs`: Docker sidecar stdio adapter.
-- `sidecar/build-embedded.mjs`: bundle generation for embedded Deno.
+- `src/signer.rs`: Alloy local-key and Ledger signer construction.
+- `railgun-runtime/runtime.mjs`: shared Railgun SDK runtime logic.
+- `railgun-runtime/build-embedded.mjs`: bundle generation for embedded Deno.
 - `spec.md`: fuller design notes and historical plan.
 - `AGENTS.md`: implementation guidance and verification notes.
 - `wayfinding/`: exploratory artifacts retained for design history.
 
 ## Notes
 
-Arti, the Rust Tor library, does not currently provide official Node, Deno, or Bun FFI bindings.
-Those runtimes could call a custom native shim, but this project avoids that
-extra ABI surface by keeping Arti in Rust and embedding JavaScript instead.
+Arti, the Rust Tor library, does not currently provide official Node, Deno, or
+Bun FFI bindings. Those runtimes could call a custom native shim, but this
+project avoids that extra ABI surface by keeping Tor in Rust and embedding
+JavaScript instead.

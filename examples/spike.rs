@@ -3,11 +3,7 @@ use std::sync::atomic::Ordering;
 use alloy_provider::Provider;
 use anyhow::Context as _;
 use http::Uri;
-use undercover::{
-    arti::{self, IsolationLabel},
-    rpc,
-    transport::TOR_CONNECT_CALLS,
-};
+use undercover::{arti, rpc::TorRpcClient, transport::TOR_CONNECT_CALLS};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,8 +20,8 @@ async fn main() -> anyhow::Result<()> {
     let tor = arti::bootstrap(&state_dir, &cache_dir)
         .await
         .context("bootstrapping Tor")?;
-    let tor = arti::isolated_for(&tor, IsolationLabel::EventSync);
-    let provider = rpc::provider(tor, rpc_url);
+    let tor = arti::isolated_client(&tor);
+    let provider = TorRpcClient::new(tor, rpc_url).provider();
 
     let chain_id = provider.get_chain_id().await.context("eth_chainId")?;
     let block_number = provider

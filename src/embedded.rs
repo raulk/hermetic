@@ -1,8 +1,6 @@
-#![cfg(feature = "deno-runtime")]
+use std::{borrow::Cow, path::Path, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
 
-use std::{borrow::Cow, path::Path, path::PathBuf, rc::Rc, sync::Arc};
-
-use anyhow::{anyhow, Context as _};
+use anyhow::{anyhow, Context as _, Result};
 use deno_error::JsErrorBox;
 use deno_runtime::{
     deno_core::{extension, resolve_url, v8, FastString, FsModuleLoader, ModuleSpecifier},
@@ -18,8 +16,9 @@ use deno_runtime::{
     FeatureChecker,
 };
 use serde::{de::DeserializeOwned, Serialize};
+use serde_json::Value;
 
-use crate::{arti::ArtiClient, rpc};
+use crate::rpc::{ReverseEnvelope, TorRpcClient};
 
 #[derive(Debug)]
 struct NoNpm;
@@ -68,7 +67,7 @@ impl NodeRequireLoader for LocalNodeRequireLoader {
     ) -> Result<Cow<'a, Path>, JsErrorBox> {
         permissions
             .check_open(path, OpenAccessKind::Read, Some("node:require"))
-            .map(|path| path.into_path())
+            .map(deno_runtime::deno_permissions::CheckedPath::into_path)
             .map_err(JsErrorBox::from_err)
     }
 
@@ -118,7 +117,13 @@ pub struct EmbeddedRailgun {
 }
 
 impl EmbeddedRailgun {
-    pub async fn new(workdir: &Path) -> anyhow::Result<Self> {
+    /// Create an embedded Deno worker and load the generated Railgun bundle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the workdir cannot be resolved, the generated bundle
+    /// cannot be read, or Deno worker initialization fails.
+    pub async fn new(workdir: &Path) -> Result<Self> {
         let workdir = std::fs::canonicalize(workdir).context("resolving embedded workdir")?;
         let main_module = resolve_url("file:///undercover-embedded-railgun.js")?;
         let mut worker = create_worker(&main_module, &workdir)?;
@@ -134,7 +139,7 @@ globalThis.__undercover_workdir = {cwd};
 globalThis.__undercover_reverse = [];
 globalThis.__undercover_deno_fetch = globalThis.fetch;
 globalThis.__undercover_require_ready = import("node:module").then((module) => {{
-  globalThis.require = module.createRequire("file://" + globalThis.__undercover_workdir + "/sidecar/runtime.mjs");
+  globalThis.require = module.createRequire("file://" + globalThis.__undercover_workdir + "/railgun-runtime/runtime.mjs");
 }});
 async function __undercover_denied(op) {{
   try {{
@@ -198,7 +203,13 @@ globalThis.__undercover_host = {{
         })
     }
 
-    pub async fn call<Req, Res>(&mut self, method: &str, params: Req) -> anyhow::Result<Res>
+    /// Call a Railgun runtime method without reverse RPC.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the JavaScript call fails or its result cannot be
+    /// deserialized into `Res`.
+    pub async fn call<Req, Res>(&mut self, method: &str, params: Req) -> Result<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -210,12 +221,12 @@ globalThis.__undercover_host = {{
         self.worker.execute_script(
             "undercover:embedded-call",
             format!(
-                r#"
+                r"
 globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {params}).then(
   (result) => {{ globalThis.__undercover_result_{id} = {{ ok: true, result }}; }},
   (error) => {{ globalThis.__undercover_result_{id} = {{ ok: false, error: String(error?.stack ?? error) }}; }},
 );
-"#
+"
             )
             .into(),
         )?;
@@ -225,31 +236,32 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {p
             format!("JSON.stringify(globalThis.__undercover_result_{id})").into(),
         )?;
         let json = v8_to_string(&mut self.worker, value)?;
-        let response: serde_json::Value = serde_json::from_str(&json)?;
-        if response
-            .get("ok")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-        {
+        let response: Value = serde_json::from_str(&json)?;
+        if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             serde_json::from_value(response["result"].clone()).map_err(Into::into)
         } else {
             anyhow::bail!(
                 "embedded Railgun error: {}",
                 response
                     .get("error")
-                    .and_then(serde_json::Value::as_str)
+                    .and_then(Value::as_str)
                     .unwrap_or("unknown error")
             )
         }
     }
 
+    /// Call a Railgun runtime method while servicing reverse JSON-RPC/HTTP via Tor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JavaScript execution fails, reverse RPC fails, or the
+    /// final result cannot be deserialized into `Res`.
     pub async fn call_with_reverse_rpc<Req, Res>(
         &mut self,
         method: &str,
         params: Req,
-        tor: ArtiClient,
-        rpc_url: http::Uri,
-    ) -> anyhow::Result<Res>
+        rpc_client: TorRpcClient,
+    ) -> Result<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
@@ -261,48 +273,29 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {p
         self.worker.execute_script(
             "undercover:embedded-call-rpc",
             format!(
-                r#"
+                r"
 globalThis.__undercover_result_{id} = undefined;
 globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json}, {params_json}).then(
   (result) => {{ globalThis.__undercover_result_{id} = {{ ok: true, result }}; }},
   (error) => {{ globalThis.__undercover_result_{id} = {{ ok: false, error: String(error?.stack ?? error) }}; }},
 );
-"#
+"
             )
             .into(),
         )?;
 
         loop {
             self.worker
-                .run_up_to_duration(std::time::Duration::from_millis(10))
+                .run_up_to_duration(Duration::from_millis(10))
                 .await?;
 
             if let Some(response) = self.take_call_result(id)? {
-                return decode_call_response(response);
+                return decode_call_response(&response);
             }
 
             while let Some(reverse) = self.take_reverse_request()? {
-                let reverse_id = reverse
-                    .get("id")
-                    .and_then(serde_json::Value::as_u64)
-                    .ok_or_else(|| anyhow!("reverse request missing id"))?;
-                let method = reverse
-                    .get("method")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| anyhow!("reverse request missing method"))?;
-                let params = reverse
-                    .get("params")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                let result = if method == "__http_request" {
-                    let request: rpc::ReverseHttpRequest =
-                        serde_json::from_value(params).context("decoding reverse HTTP")?;
-                    rpc::raw_http_request(tor.clone(), request)
-                        .await
-                        .and_then(|response| serde_json::to_value(response).map_err(Into::into))
-                } else {
-                    rpc::raw_request(tor.clone(), rpc_url.clone(), method, params).await
-                };
+                let (reverse_id, reverse) = reverse.into_request()?;
+                let result = rpc_client.handle_reverse_request(reverse).await;
                 let response = match result {
                     Ok(result) => serde_json::json!({
                         "undercover_reverse_rpc": true,
@@ -327,7 +320,7 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json
         }
     }
 
-    fn take_call_result(&mut self, id: u64) -> anyhow::Result<Option<serde_json::Value>> {
+    fn take_call_result(&mut self, id: u64) -> Result<Option<Value>> {
         let value = self.worker.execute_script(
             "undercover:embedded-result-poll",
             format!(
@@ -346,10 +339,10 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json
         serde_json::from_str(&json).map_err(Into::into)
     }
 
-    fn take_reverse_request(&mut self) -> anyhow::Result<Option<serde_json::Value>> {
+    fn take_reverse_request(&mut self) -> Result<Option<ReverseEnvelope>> {
         let value = self.worker.execute_script(
             "undercover:embedded-reverse-poll",
-            r#"JSON.stringify(globalThis.__undercover_reverse.shift() ?? null)"#
+            r"JSON.stringify(globalThis.__undercover_reverse.shift() ?? null)"
                 .to_string()
                 .into(),
         )?;
@@ -358,34 +351,30 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json
     }
 }
 
-fn decode_call_response<Res>(response: serde_json::Value) -> anyhow::Result<Res>
+fn decode_call_response<Res>(response: &Value) -> Result<Res>
 where
     Res: DeserializeOwned,
 {
-    if response
-        .get("ok")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-    {
+    if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         serde_json::from_value(response["result"].clone()).map_err(Into::into)
     } else {
         Err(anyhow!(
             "embedded Railgun error: {}",
             response
                 .get("error")
-                .and_then(serde_json::Value::as_str)
+                .and_then(Value::as_str)
                 .unwrap_or("unknown error")
         ))
     }
 }
 
-fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> anyhow::Result<MainWorker> {
+fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWorker> {
     let parser = Arc::new(RuntimePermissionDescriptorParser::new(
         sys_traits::impls::RealSys,
     ));
     let artifacts = workdir.join("artifacts").to_string_lossy().to_string();
     let wasm_packages = workdir
-        .join("sidecar/node_modules/@railgun-community")
+        .join("railgun-runtime/node_modules/@railgun-community")
         .to_string_lossy()
         .to_string();
     let permissions = Permissions::from_options(
@@ -429,11 +418,11 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> anyhow::Resul
     ))
 }
 
-fn v8_to_string(worker: &mut MainWorker, value: v8::Global<v8::Value>) -> anyhow::Result<String> {
+fn v8_to_string(worker: &mut MainWorker, value: v8::Global<v8::Value>) -> Result<String> {
     deno_runtime::deno_core::scope!(scope, worker.js_runtime);
     let local = v8::Local::new(scope, value);
     local
         .to_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
-        .ok_or_else(|| anyhow::anyhow!("result was not a string"))
+        .ok_or_else(|| anyhow!("result was not a string"))
 }

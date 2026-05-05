@@ -4,7 +4,7 @@ default:
 build:
     cargo build --release
     cargo deny check bans
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 
 check-deps:
     cargo build
@@ -17,51 +17,28 @@ spike:
     cargo test --release --test spike_connector_counter
 
 check-static:
-    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src sidecar examples tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v "sidecar/main\\.mjs:.*fetch\\('https://example.com'\\)" | rg -v '__undercover_deno_fetch\("https://example\.com"\)' && exit 1 || true
-    cargo clippy --all-targets -- -D warnings
+    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src railgun-runtime examples tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v '__undercover_deno_fetch\("https://example\.com"\)' && exit 1 || true
+    cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 
-ping rpc:
+ping rpc="https://ethereum-sepolia-rpc.publicnode.com":
     cargo run --release -- ping --rpc {{rpc}}
-
-sidecar-smoke:
-    docker build -t undercover-sidecar:dev sidecar
-    cargo run --release -- sidecar-smoke
-
-load-wallet-smoke mnemonic:
-    docker build -t undercover-sidecar:dev sidecar
-    cargo run --release -- load-wallet-smoke --railgun-mnemonic "{{mnemonic}}"
 
 signer-address:
     cargo run --release -- signer-address
 
-check-sidecar:
-    docker build -t undercover-sidecar:dev sidecar
-    cargo test --test sidecar_permissions_smoke
-    cargo run --release -- sidecar-smoke
-    cargo run --release -- load-wallet-smoke --railgun-mnemonic "test test test test test test test test test test test junk"
+runtime-bundle:
+    cd railgun-runtime && npm run bundle:embedded
 
-shield-base-token amount_wei rpc="https://ethereum-sepolia-rpc.publicnode.com":
-    docker build -t undercover-sidecar:dev sidecar
-    cargo run --release -- shield-base-token --rpc {{rpc}} --amount-wei {{amount_wei}}
+runtime-smoke:
+    cd railgun-runtime && npm run bundle:embedded
+    cargo run -- runtime-smoke
 
-shield-base-token-dry-run amount_wei rpc="https://ethereum-sepolia-rpc.publicnode.com":
-    docker build -t undercover-sidecar:dev sidecar
-    cargo run --release -- shield-base-token --dry-run --rpc {{rpc}} --amount-wei {{amount_wei}}
-
-refresh-balance creation_block="0" rpc="https://ethereum-sepolia-rpc.publicnode.com":
-    docker build -t undercover-sidecar:dev sidecar
-    cargo run --release -- refresh-balance --rpc {{rpc}} --creation-block {{creation_block}}
-
-embedded-bundle:
-    cd sidecar && npm run bundle:embedded
-
-embedded-smoke:
-    cd sidecar && npm run bundle:embedded
-    cargo run --features deno-runtime -- sidecar-smoke --embedded
-    cargo run --features deno-runtime -- load-wallet-smoke --embedded --railgun-mnemonic "test test test test test test test test test test test junk"
+load-wallet mnemonic="test test test test test test test test test test test junk":
+    cd railgun-runtime && npm run bundle:embedded
+    cargo run -- load-wallet --railgun-mnemonic "{{mnemonic}}"
 
 embedded-check:
     cargo fmt --check
-    cd sidecar && npm run bundle:embedded
-    cargo run --features deno-runtime -- sidecar-smoke --embedded
-    cargo clippy --features deno-runtime --all-targets -- -D warnings
+    cd railgun-runtime && npm run bundle:embedded
+    cargo run -- runtime-smoke
+    cargo clippy --all-targets -- -D warnings -W clippy::pedantic

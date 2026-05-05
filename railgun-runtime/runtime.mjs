@@ -2,16 +2,18 @@ import * as wallet from '@railgun-community/wallet';
 import * as sharedModels from '@railgun-community/shared-models';
 import memdown from 'memdown';
 import { BrowserProvider, Network } from 'ethers';
-import { ContractStore } from './node_modules/@railgun-community/engine/dist/contracts/contract-store.js';
-import { RelayAdaptV2Contract } from './node_modules/@railgun-community/engine/dist/contracts/relay-adapt/V2/relay-adapt-v2.js';
 import { print } from 'graphql';
-import { getEngine } from './node_modules/@railgun-community/wallet/dist/services/railgun/core/engine.js';
-import { POINodeRequest } from './node_modules/@railgun-community/wallet/dist/services/poi/poi-node-request.js';
 import axios from 'axios';
 import * as snarkjs from 'snarkjs';
-import * as graphV2 from './node_modules/@railgun-community/wallet/dist/services/railgun/quick-sync/V2/graphql/index.js';
-import * as graphFormattersV2 from './node_modules/@railgun-community/wallet/dist/services/railgun/quick-sync/V2/graph-type-formatters-v2.js';
-import * as graphQuery from './node_modules/@railgun-community/wallet/dist/services/railgun/quick-sync/graph-query.js';
+import {
+  ContractStore,
+  POINodeRequest,
+  RelayAdaptV2Contract,
+  getEngine,
+  graphFormattersV2,
+  graphQuery,
+  graphV2,
+} from './sdk-internals.mjs';
 
 let engineStarted = false;
 let networkContractsLoaded = false;
@@ -218,7 +220,7 @@ function reverseRpc(method, params = []) {
 
 async function reverseHttpFetch(input, init = {}) {
   if (!reverseHttpEnabled) {
-    throw new Error('sidecar fetch is disabled');
+    throw new Error('Railgun runtime fetch is disabled');
   }
   const url = typeof input === 'string' ? input : input.url;
   const method = init.method ?? (typeof input === 'string' ? 'GET' : input.method);
@@ -259,7 +261,7 @@ function handleReverseRpcResponse(response) {
   return true;
 }
 
-function createArtiEip1193Provider() {
+function createTorEip1193Provider() {
   return {
     request: async ({ method, params }) => {
       const requestParams = params ?? [];
@@ -300,9 +302,9 @@ function createArtiEip1193Provider() {
   };
 }
 
-function createArtiEthersProvider() {
+function createTorEthersProvider() {
   const network = Network.from(11155111);
-  const provider = new BrowserProvider(createArtiEip1193Provider(), network, {
+  const provider = new BrowserProvider(createTorEip1193Provider(), network, {
     staticNetwork: network,
   });
   provider.isPollingProvider = true;
@@ -322,12 +324,12 @@ async function quickSyncAndDecryptBalances(chain, walletID) {
   );
 }
 
-async function ensureNetworkLoadedThroughArti() {
+async function ensureNetworkLoadedThroughTor() {
   await ensureEngine();
   reverseHttpEnabled = true;
   const networkName = sharedModels.NetworkName.EthereumSepolia;
   const network = sharedModels.NETWORK_CONFIG[networkName];
-  const provider = createArtiEthersProvider();
+  const provider = createTorEthersProvider();
   wallet.setFallbackProviderForNetwork(networkName, provider);
   wallet.setPollingProviderForNetwork(networkName, provider);
   const engine = getEngine();
@@ -380,12 +382,12 @@ export async function handle(method, params = {}) {
         shielded_address: info.railgunAddress,
       };
     }
-    case 'load_network_arti': {
-      await ensureNetworkLoadedThroughArti();
+    case 'load_network_tor': {
+      await ensureNetworkLoadedThroughTor();
       return { loaded: true };
     }
     case 'refresh_balance': {
-      await ensureNetworkLoadedThroughArti();
+      await ensureNetworkLoadedThroughTor();
       const walletID = params.wallet_id;
       if (typeof walletID !== 'string') {
         throw new Error('refresh_balance requires wallet_id string');
@@ -419,25 +421,25 @@ export async function handle(method, params = {}) {
         spendable_balance: spendableBalance.toString(),
       };
     }
-    case 'populate_unshield_base_token': {
-      await ensureNetworkLoadedThroughArti();
+    case 'prepare_unshield_base_token': {
+      await ensureNetworkLoadedThroughTor();
       const walletID = params.wallet_id;
       const publicWalletAddress = params.public_wallet_address;
       const encryptionKey = params.encryption_key;
       if (typeof walletID !== 'string') {
-        throw new Error('populate_unshield_base_token requires wallet_id string');
+        throw new Error('prepare_unshield_base_token requires wallet_id string');
       }
       if (typeof publicWalletAddress !== 'string') {
         throw new Error(
-          'populate_unshield_base_token requires public_wallet_address string',
+          'prepare_unshield_base_token requires public_wallet_address string',
         );
       }
       if (typeof encryptionKey !== 'string') {
-        throw new Error('populate_unshield_base_token requires encryption_key string');
+        throw new Error('prepare_unshield_base_token requires encryption_key string');
       }
       const amount = BigInt(params.amount_wei ?? 0);
       if (amount <= 0n) {
-        throw new Error('populate_unshield_base_token requires positive amount_wei');
+        throw new Error('prepare_unshield_base_token requires positive amount_wei');
       }
       const networkName = sharedModels.NetworkName.EthereumSepolia;
       const tokenAddress = sharedModels.BaseTokenWrappedAddress[networkName];
@@ -567,7 +569,7 @@ export async function handle(method, params = {}) {
         value: transaction.value?.toString() ?? '0',
       };
     }
-    case 'sidecar-permissions-smoke': {
+    case 'runtime-permissions-smoke': {
       return requireHost('permissionSmoke')(params);
     }
     default:

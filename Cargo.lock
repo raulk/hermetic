@@ -11763,7 +11763,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
- "deno_core",
  "deno_error",
  "deno_runtime",
  "deno_semver",
