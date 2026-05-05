@@ -1,0 +1,8 @@
+[bans]
+multiple-versions = "allow"
+deny = [
+  { name = "reqwest" },
+  { name = "alloy-transport-http" },
+  { name = "hyper-tls" },
+  { name = "native-tls" },
+]

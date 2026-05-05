@@ -1,0 +1,11 @@
+/target/
+/node_modules/
+/sidecar/node_modules/
+/.arti/
+/trace.pcap
+/.env
+*.log
+
+# Railgun proving artifacts are downloaded/cacheable and large.
+/artifacts/*
+!/artifacts/manifest

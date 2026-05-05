@@ -1,0 +1,7 @@
+disallowed-methods = [
+  { path = "tokio::net::TcpStream::connect", reason = "all TCP egress must go through Arti" },
+  { path = "std::net::TcpStream::connect", reason = "all TCP egress must go through Arti" },
+  { path = "std::net::ToSocketAddrs::to_socket_addrs", reason = "DNS resolution must happen inside Tor" },
+  { path = "tokio::net::lookup_host", reason = "DNS resolution must happen inside Tor" },
+  { path = "hyper_util::client::legacy::connect::http::HttpConnector::new", reason = "only ArtiHttpsConnector is allowed" },
+]

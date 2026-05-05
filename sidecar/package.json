@@ -1,0 +1,12 @@
+{
+  "name": "undercover-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@railgun-community/shared-models": "8.0.1",
+    "@railgun-community/wallet": "10.8.6",
+    "memdown": "^6.1.1",
+    "snarkjs": "^0.7.6"
+  }
+}
