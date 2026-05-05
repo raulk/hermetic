@@ -12,12 +12,8 @@ check-deps:
     cargo deny check bans
     cargo fmt --check
 
-spike:
-    cargo run --release --example spike
-    cargo test --release --test spike_connector_counter
-
 check-static:
-    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src railgun-runtime examples tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v '__undercover_deno_fetch\("https://example\.com"\)' && exit 1 || true
+    @rg -n --pcre2 '(TcpStream::connect|lookup_host|to_socket_addrs|reqwest|HttpConnector|ProviderBuilder::on_http|fetch\()' src railgun-runtime tests | rg -v '^([^:]*):(\s*//|\s*\*)' | rg -v '__undercover_deno_fetch\("https://example\.com"\)' && exit 1 || true
     cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 
 ping rpc="https://ethereum-sepolia-rpc.publicnode.com":

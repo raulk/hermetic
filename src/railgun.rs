@@ -20,7 +20,7 @@ pub struct Health {
 
 #[derive(Debug, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
-pub struct PermissionSmoke {
+pub struct Permissions {
     pub fetch_denied: bool,
     pub connect_denied: bool,
     pub node_net_denied: bool,
@@ -83,7 +83,7 @@ impl RailgunRuntime {
     /// # Errors
     ///
     /// Returns an error when the embedded runtime call fails.
-    pub async fn permission_smoke(&mut self, node_net_port: u16) -> Result<PermissionSmoke> {
+    pub async fn check_perms(&mut self, node_net_port: u16) -> Result<Permissions> {
         self.inner
             .call(
                 "runtime-permissions-smoke",

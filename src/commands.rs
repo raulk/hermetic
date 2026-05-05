@@ -231,7 +231,7 @@ async fn runtime_smoke(runtime: &mut RailgunRuntime) -> Result<()> {
     println!("node_compat={}", health.node_compat);
     anyhow::ensure!(health.node_compat, "embedded SDK imports did not load");
 
-    let smoke = runtime.permission_smoke(node_net_port).await?;
+    let smoke = runtime.check_perms(node_net_port).await?;
     println!("fetch_denied={}", smoke.fetch_denied);
     println!("connect_denied={}", smoke.connect_denied);
     println!("node_net_denied={}", smoke.node_net_denied);

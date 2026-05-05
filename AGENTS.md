@@ -49,5 +49,6 @@
 - `wayfinding/deno-embedding/` contains exploratory Deno embedding proofs.
   They are retained for design history only and should not be part of the
   normal build or verification path.
-- `examples/spike.rs` remains the useful Tor transport spike and may stay
-  under Cargo examples.
+- `wayfinding/tor-transport-spike/` contains the old Tor transport spike. It is
+  useful design history, but the CLI now owns the supported Tor verification
+  path.
