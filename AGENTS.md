@@ -1,4 +1,4 @@
-# Undercover Agent Notes
+# Hermetic Agent Notes
 
 ## Embedded runtime direction
 
@@ -32,8 +32,8 @@
 ## Verification
 
 - Production verification should be CLI-level, not example-level:
-  `runtime-smoke`, `load-wallet`, `shield --dry-run`, `balance`, and
-  unshield preflight.
+  `doctor`, `wallet import`, `wallet list`, `shield --dry-run`, `balance`,
+  and unshield preflight.
 - `refresh_balance` and unshield preflight should complete via Railgun
   quick-sync GraphQL over Tor plus local balance decryption. Avoid the SDK
   slow `eth_getLogs` scan from deployment block; it can time out against

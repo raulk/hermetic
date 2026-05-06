@@ -5490,6 +5490,48 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hermetic"
+version = "0.1.0"
+dependencies = [
+ "alloy-json-rpc",
+ "alloy-network",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-client",
+ "alloy-rpc-types-eth",
+ "alloy-signer-ledger",
+ "alloy-signer-local",
+ "alloy-transport",
+ "anyhow",
+ "arti-client",
+ "base64 0.22.1",
+ "bytes",
+ "clap",
+ "deno_core",
+ "deno_error",
+ "deno_runtime",
+ "deno_semver",
+ "elliptic-curve 0.14.0-rc.31",
+ "http 1.4.0",
+ "http-body-util",
+ "hyper 1.9.0",
+ "hyper-util",
+ "node_resolver",
+ "pkcs8 0.11.0-rc.11",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sys_traits",
+ "tokio",
+ "tokio-rustls",
+ "tor-rtcompat",
+ "tower 0.5.3",
+ "tracing",
+ "tracing-subscriber",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11743,51 +11785,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1b88fcfe09e89d3866a5c11019378088af2d24c3fbd4f0543f96b479ec90697"
 dependencies = [
  "version_check",
-]
-
-[[package]]
-name = "undercover"
-version = "0.1.0"
-dependencies = [
- "alloy-json-rpc",
- "alloy-network",
- "alloy-primitives",
- "alloy-provider",
- "alloy-rpc-client",
- "alloy-rpc-types-eth",
- "alloy-signer-ledger",
- "alloy-signer-local",
- "alloy-transport",
- "anyhow",
- "arti-client",
- "base64 0.22.1",
- "bytes",
- "clap",
- "deno_error",
- "deno_runtime",
- "deno_semver",
- "elliptic-curve 0.14.0-rc.31",
- "http 1.4.0",
- "http-body-util",
- "hyper 1.9.0",
- "hyper-util",
- "node_resolver",
- "pkcs8 0.11.0-rc.11",
- "rustls",
- "serde",
- "serde_json",
- "sys_traits",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-rustls",
- "tor-rtcompat",
- "tower 0.5.3",
- "tracing",
- "tracing-subscriber",
- "url",
- "webpki-roots 0.26.11",
- "zeroize",
 ]
 
 [[package]]

@@ -79,12 +79,12 @@ fn worker(main_module: &ModuleSpecifier) -> MainWorker {
 #[cfg(feature = "deno-runtime")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let main_module = resolve_url("file:///undercover-runtime-smoke.js")?;
+    let main_module = resolve_url("file:///hermetic-runtime-smoke.js")?;
     let mut worker = worker(&main_module);
     worker.execute_script(
-        "undercover:runtime-smoke",
+        "hermetic:runtime-smoke",
         r#"
-globalThis.__undercover_result = {
+globalThis.__hermetic_result = {
   deno: typeof Deno,
   fetch: typeof fetch,
   process: typeof process,
@@ -96,8 +96,8 @@ globalThis.__undercover_result = {
     )?;
     worker.run_event_loop(false).await?;
     let result = worker.execute_script(
-        "undercover:runtime-smoke-result",
-        "JSON.stringify(globalThis.__undercover_result)"
+        "hermetic:runtime-smoke-result",
+        "JSON.stringify(globalThis.__hermetic_result)"
             .to_string()
             .into(),
     )?;

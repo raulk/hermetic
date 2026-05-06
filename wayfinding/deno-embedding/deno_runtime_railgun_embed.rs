@@ -44,7 +44,7 @@ impl NodeRequireLoader for LocalNodeRequireLoader {
 
 #[cfg(feature = "deno-runtime")]
 extension!(
-    undercover_node_state,
+    hermetic_node_state,
     state = |state| {
         let sys = sys_traits::impls::RealSys;
         let pkg_json_resolver =
@@ -131,19 +131,19 @@ fn worker(main_module: &ModuleSpecifier) -> MainWorker {
         bundle_provider: None,
     };
     let mut options = WorkerOptions::default();
-    options.extensions.push(undercover_node_state::init());
+    options.extensions.push(hermetic_node_state::init());
     MainWorker::bootstrap_from_options(main_module, services, options)
 }
 
 #[cfg(feature = "deno-runtime")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
-    let main_module = resolve_url("file:///undercover-runtime-railgun.js")?;
+    let main_module = resolve_url("file:///hermetic-runtime-railgun.js")?;
     let mut worker = worker(&main_module);
     worker.execute_script(
-        "undercover:railgun-require",
+        "hermetic:railgun-require",
         r#"
-globalThis.__undercover_ready = import("node:module").then((module) => {
+globalThis.__hermetic_ready = import("node:module").then((module) => {
   globalThis.require = module.createRequire("file://" + Deno.cwd() + "/sidecar/runtime.mjs");
 });
 "#
@@ -152,7 +152,7 @@ globalThis.__undercover_ready = import("node:module").then((module) => {
     )?;
     worker.run_event_loop(false).await?;
     worker.execute_script(
-        "undercover:railgun-require-check",
+        "hermetic:railgun-require-check",
         r#"
 if (typeof require !== "function") {
   throw new Error(`node require unavailable: ${typeof require}`);
@@ -163,12 +163,12 @@ if (typeof require !== "function") {
     )?;
 
     let bundle = std::fs::read_to_string("embedded/railgun_runtime.iife.js")?;
-    worker.execute_script("undercover:railgun-bundle", bundle.into())?;
+    worker.execute_script("hermetic:railgun-bundle", bundle.into())?;
     worker.execute_script(
-        "undercover:railgun-health",
+        "hermetic:railgun-health",
         r#"
-globalThis.__undercover_ready = UndercoverRailgunRuntime.handle("health").then((result) => {
-  globalThis.__undercover_result = result;
+globalThis.__hermetic_ready = HermeticRailgunRuntime.handle("health").then((result) => {
+  globalThis.__hermetic_result = result;
 });
 "#
         .to_string()
@@ -176,8 +176,8 @@ globalThis.__undercover_ready = UndercoverRailgunRuntime.handle("health").then((
     )?;
     worker.run_event_loop(false).await?;
     let result = worker.execute_script(
-        "undercover:railgun-health-result",
-        "JSON.stringify(globalThis.__undercover_result)"
+        "hermetic:railgun-health-result",
+        "JSON.stringify(globalThis.__hermetic_result)"
             .to_string()
             .into(),
     )?;

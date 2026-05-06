@@ -1,12 +1,8 @@
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
-};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
 use alloy_json_rpc::{RequestPacket, ResponsePacket};
 use alloy_transport::{TransportError, TransportErrorKind, TransportFut};
@@ -15,13 +11,14 @@ use arti_client::IntoTorAddr;
 use bytes::Bytes;
 use http::{Request, Uri};
 use http_body_util::{BodyExt, Full};
-use hyper_util::{
-    client::legacy::{connect::Connected, Client},
-    rt::{TokioExecutor, TokioIo},
-};
-use rustls::{pki_types::ServerName, RootCertStore};
+use hyper_util::client::legacy::connect::Connected;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use rustls::pki_types::ServerName;
+use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio_rustls::{client::TlsStream, TlsConnector};
+use tokio_rustls::client::TlsStream;
+use tokio_rustls::TlsConnector;
 use tower::Service;
 
 use crate::arti::ArtiClient;
@@ -176,9 +173,18 @@ impl Service<RequestPacket> for ArtiJsonRpcTransport {
         let rpc_url = self.rpc_url.clone();
 
         Box::pin(async move {
+            let headers = req.headers();
             let body = req.serialize().map_err(TransportErrorKind::custom)?;
-            let request = Request::post(rpc_url)
-                .header(http::header::CONTENT_TYPE, "application/json")
+            let mut request = Request::post(rpc_url);
+            let request_headers = request.headers_mut().ok_or_else(|| {
+                TransportErrorKind::custom_str("RPC request builder has no headers")
+            })?;
+            request_headers.insert(
+                http::header::CONTENT_TYPE,
+                http::HeaderValue::from_static("application/json"),
+            );
+            request_headers.extend(headers);
+            let request = request
                 .body(Full::new(Bytes::copy_from_slice(body.get().as_bytes())))
                 .map_err(TransportErrorKind::custom)?;
 

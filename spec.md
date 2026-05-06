@@ -1,6 +1,6 @@
-# Undercover Spec
+# Hermetic Spec
 
-Undercover is a Rust CLI for Railgun transactions whose network egress is
+Hermetic is a Rust CLI for Railgun transactions whose network egress is
 owned by Rust and routed through Tor. Railgun SDK code runs inside an embedded
 Deno worker in the same process. JavaScript has no network permission; when it
 needs JSON-RPC or GraphQL data, it asks Rust to perform the request through
@@ -30,20 +30,30 @@ bundle generated from `railgun-runtime/runtime.mjs` is loaded by
   `TorClient::connect` via `src/transport.rs`.
 - RPC DNS resolution is delegated to Tor by passing hostnames into
   `TorClient::connect`; the code must not pre-resolve RPC hosts.
-- Embedded Deno must deny `fetch`, `Deno.connect`, `node:net`, writes outside
-  `artifacts/`, and broad environment reads.
+- Embedded Deno must deny ambient `fetch`, `Deno.connect`, `node:net`, writes
+  outside `artifacts/`, and broad environment reads.
 - The public EOA signer stays in Rust/Alloy. The Railgun mnemonic is passed
-  only to the embedded SDK runtime.
-- The JS runtime can request reverse JSON-RPC/HTTP, but Rust owns execution of
-  those requests and routes them through Tor.
+  only to SDK wallet import/create flows; transaction commands load the
+  SDK-managed wallet by ID from the local wallet manifest.
+- The JS runtime can request reverse JSON-RPC and named reverse HTTP services,
+  but Rust owns execution of those requests and routes them through Tor.
+- Reverse HTTP is service-scoped to Railgun Sepolia squid GraphQL and the PPOI
+  aggregator. Treat additions to this list as part of the trusted
+  bundled-runtime boundary.
+- Railgun wallet encryption keys are operator-supplied; the CLI must not use a
+  known default encryption key. Shield private keys are generated per shield
+  when the caller does not supply one.
 
 ## Runtime Boundary
 
-`src/railgun.rs` is the typed Rust facade over the embedded runtime:
+`src/railgun/` owns the typed Rust facade over the embedded runtime and the
+SDK wallet manifest:
 
 - `health`
 - `permission_smoke`
 - `load_wallet`
+- `create_wallet`
+- `load_wallet_by_id`
 - `populate_shield_base_token`
 - `refresh_balance`
 - `prepare_unshield_base_token`
@@ -57,8 +67,11 @@ bundled by `railgun-runtime/build-embedded.mjs`.
 The CLI commands are:
 
 - `ping`: verify RPC reachability through Tor.
-- `runtime-smoke`: verify embedded SDK load and denied JS egress.
-- `load-wallet`: load a Railgun wallet and print its shielded address.
+- `doctor`: verify embedded SDK load, host imports, and denied JS egress.
+- `wallet import`: import a mnemonic into the SDK artifact store and record
+  non-secret wallet metadata.
+- `wallet create`: create a new SDK wallet and print its mnemonic once.
+- `wallet list`: list known SDK wallets.
 - `signer-address`: print the public gas-payer address.
 - `shield`: populate and optionally broadcast a base-token shield transaction.
 - `balance`: refresh and print the private base-token balance.
@@ -86,11 +99,8 @@ transactions. It does not replace the Railgun mnemonic consumed by the SDK.
 Required local checks:
 
 ```sh
-cargo fmt --check
-cargo check
-cargo clippy --all-targets -- -D warnings -W clippy::pedantic
-just runtime-smoke
-just check-static
+just check
+just doctor
 ```
 
 For stricter cleanup work, run:

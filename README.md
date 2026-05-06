@@ -1,6 +1,6 @@
-# Undercover
+# Hermetic
 
-Undercover is a proof of concept for Railgun transactions whose network
+Hermetic is a proof of concept for Railgun transactions whose network
 egress is owned by Rust and routed through Tor. Rust embeds Deno for the
 Railgun SDK, denies network access inside JavaScript, and services SDK
 JSON-RPC/HTTP requests through Tor.
@@ -16,10 +16,11 @@ Rust CLI
        └─ bundled Railgun SDK runtime
 ```
 
-The embedded worker loads `embedded/railgun_runtime.iife.js`, generated from
+The embedded worker loads `embedded/railgun_runtime.bundle.mjs`, generated from
 `railgun-runtime/runtime.mjs`. JavaScript cannot open sockets or use ambient
-fetch. When the Railgun SDK needs JSON-RPC or GraphQL, it emits a reverse
-request to Rust; Rust performs the request through Tor.
+network fetch. When the Railgun SDK needs JSON-RPC, quick-sync GraphQL, or PPOI
+HTTP, it emits a reverse request to Rust; Rust maps the request to an
+allowlisted service and performs it through Tor.
 
 Railgun quick-sync uses
 `https://rail-squid.squids.live/squid-railgun-eth-sepolia-v2/graphql`
@@ -41,7 +42,7 @@ npm install
 Generate the embedded Railgun bundle:
 
 ```sh
-just runtime-bundle
+just bundle
 ```
 
 The generated `embedded/` files are build outputs and are intentionally not
@@ -50,12 +51,11 @@ committed.
 ## Checks
 
 ```sh
-just runtime-smoke
-just embedded-check
-just check-static
+just doctor
+just check
 ```
 
-The runtime smoke verifies that the Railgun SDK loads under embedded Deno and
+The doctor command verifies that the Railgun SDK loads under embedded Deno and
 that Deno `fetch`, `Deno.connect`, `node:net`, writes outside artifacts, and
 broad env reads are denied while artifact reads are allowed.
 
@@ -64,7 +64,7 @@ broad env reads are denied while artifact reads are allowed.
 Check the public signer address:
 
 ```sh
-cargo run -- signer-address --private-key "$UNDERCOVER_PRIVATE_KEY"
+cargo run -- signer-address --private-key "$HERMETIC_PRIVATE_KEY"
 cargo run -- signer-address --ledger
 ```
 
@@ -84,11 +84,30 @@ Ping an RPC endpoint through Tor:
 cargo run -- ping --rpc https://ethereum-sepolia-rpc.publicnode.com
 ```
 
-Load a Railgun wallet:
+Import an existing Railgun mnemonic into the SDK artifact store:
 
 ```sh
-cargo run -- load-wallet \
-  --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
+cargo run -- wallet import \
+  --label main \
+  --railgun-mnemonic "$HERMETIC_RAILGUN_MNEMONIC" \
+  --encryption-key "$HERMETIC_RAILGUN_ENCRYPTION_KEY"
+```
+
+Create a new Railgun wallet:
+
+```sh
+cargo run -- wallet create \
+  --label main \
+  --encryption-key "$HERMETIC_RAILGUN_ENCRYPTION_KEY"
+```
+
+The create command prints the mnemonic once. Store it outside this repository;
+the manifest stores only the SDK wallet ID, shielded address, and label.
+
+List known wallets:
+
+```sh
+cargo run -- wallet list
 ```
 
 Populate a Sepolia base-token shield transaction without broadcasting:
@@ -98,15 +117,16 @@ cargo run -- shield \
   --dry-run \
   --amount-wei 1 \
   --ledger \
-  --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
+  --wallet main \
+  --encryption-key "$HERMETIC_RAILGUN_ENCRYPTION_KEY"
 ```
 
 Refresh private balance through Tor:
 
 ```sh
 cargo run -- balance \
-  --creation-block <wallet-creation-block> \
-  --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
+  --wallet main \
+  --encryption-key "$HERMETIC_RAILGUN_ENCRYPTION_KEY"
 ```
 
 Populate an unshield transaction without broadcasting:
@@ -114,10 +134,10 @@ Populate an unshield transaction without broadcasting:
 ```sh
 cargo run -- unshield \
   --dry-run \
-  --creation-block <wallet-creation-block> \
   --amount-wei 1 \
   --ledger \
-  --railgun-mnemonic "$UNDERCOVER_RAILGUN_MNEMONIC"
+  --wallet main \
+  --encryption-key "$HERMETIC_RAILGUN_ENCRYPTION_KEY"
 ```
 
 ## Repository Map
@@ -125,7 +145,7 @@ cargo run -- unshield \
 - `src/main.rs`: process setup and CLI dispatch.
 - `src/cli.rs`: clap command and argument definitions.
 - `src/commands.rs`: command handlers.
-- `src/railgun.rs`: typed Railgun runtime API over embedded Deno.
+- `src/railgun/`: typed Railgun runtime API and SDK wallet manifest.
 - `src/embedded.rs`: embedded Deno worker and reverse-RPC pump.
 - `src/transport.rs`: Tor-backed hyper connector.
 - `src/rpc.rs`: Alloy provider construction over Arti.

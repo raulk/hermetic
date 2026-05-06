@@ -7,7 +7,7 @@ use http::Uri;
 use crate::signer::PublicSignerArgs;
 
 #[derive(Debug, Parser)]
-#[command(name = "undercover")]
+#[command(name = "hermetic")]
 #[command(about = "Railgun transactions with Rust-owned Tor egress")]
 pub struct Cli {
     #[command(subcommand)]
@@ -23,17 +23,15 @@ pub enum Command {
         #[arg(long, default_value = default_rpc())]
         rpc: Uri,
     },
-    /// Verify that the embedded Railgun runtime loads and has no network access.
-    RuntimeSmoke {
+    /// Verify runtime health, imports, and embedded network isolation.
+    Doctor {
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
     },
-    /// Load a Railgun wallet and print its shielded address.
-    LoadWallet {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[command(flatten)]
-        railgun: RailgunWalletArgs,
+    /// Manage SDK-owned Railgun wallets.
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCommand,
     },
     /// Print the public gas-payer address.
     SignerAddress {
@@ -51,7 +49,7 @@ pub enum Command {
         #[command(flatten)]
         signer: PublicSignerArgs,
         #[command(flatten)]
-        railgun: RailgunWalletArgs,
+        wallet: WalletSelectionArgs,
         #[arg(long)]
         amount_wei: U256,
         #[arg(long)]
@@ -66,9 +64,7 @@ pub enum Command {
         #[arg(long, default_value = default_rpc())]
         rpc: Uri,
         #[command(flatten)]
-        railgun: RailgunWalletArgs,
-        #[arg(long, default_value_t = 0)]
-        creation_block: u64,
+        wallet: WalletSelectionArgs,
     },
     /// Build and optionally send a Sepolia base-token unshield transaction.
     Unshield {
@@ -81,15 +77,40 @@ pub enum Command {
         #[command(flatten)]
         signer: PublicSignerArgs,
         #[command(flatten)]
-        railgun: RailgunWalletArgs,
+        wallet: WalletSelectionArgs,
         #[arg(long)]
         amount_wei: U256,
         #[arg(long)]
         recipient: Option<String>,
-        #[arg(long, default_value_t = 0)]
-        creation_block: u64,
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum WalletCommand {
+    /// Import a mnemonic into the Railgun SDK artifact store.
+    Import {
+        #[arg(long, default_value = ".")]
+        workdir: PathBuf,
+        #[arg(long)]
+        label: String,
+        #[command(flatten)]
+        railgun: RailgunImportArgs,
+    },
+    /// Create a new Railgun wallet and print the mnemonic once.
+    Create {
+        #[arg(long, default_value = ".")]
+        workdir: PathBuf,
+        #[arg(long)]
+        label: String,
+        #[command(flatten)]
+        railgun: RailgunKeyArgs,
+    },
+    /// List known Railgun wallets without exposing secrets.
+    List {
+        #[arg(long, default_value = ".")]
+        workdir: PathBuf,
     },
 }
 
@@ -102,14 +123,25 @@ pub struct TorArgs {
 }
 
 #[derive(Clone, Debug, clap::Args)]
-pub struct RailgunWalletArgs {
-    #[arg(long, env = "UNDERCOVER_RAILGUN_MNEMONIC")]
+pub struct RailgunImportArgs {
+    #[arg(long, env = "HERMETIC_RAILGUN_MNEMONIC")]
     pub railgun_mnemonic: String,
-    #[arg(
-        long,
-        default_value = "0101010101010101010101010101010101010101010101010101010101010101"
-    )]
+    #[command(flatten)]
+    pub key: RailgunKeyArgs,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+pub struct RailgunKeyArgs {
+    #[arg(long, env = "HERMETIC_RAILGUN_ENCRYPTION_KEY")]
     pub encryption_key: String,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+pub struct WalletSelectionArgs {
+    #[arg(long)]
+    pub wallet: String,
+    #[command(flatten)]
+    pub key: RailgunKeyArgs,
 }
 
 fn default_rpc() -> &'static str {

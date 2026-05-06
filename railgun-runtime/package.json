@@ -1,5 +1,5 @@
 {
-  "name": "undercover-railgun-runtime",
+  "name": "hermetic-railgun-runtime",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,12 +7,15 @@
     "bundle:embedded": "node build-embedded.mjs"
   },
   "dependencies": {
+    "@railgun-community/curve25519-scalarmult-wasm": "0.1.5",
+    "@railgun-community/poseidon-hash-wasm": "1.0.1",
     "@railgun-community/shared-models": "8.0.1",
     "@railgun-community/wallet": "10.8.6",
-    "memdown": "^6.1.1",
-    "snarkjs": "^0.7.6"
+    "abstract-leveldown": "7.2.0",
+    "ethers": "6.14.3",
+    "snarkjs": "0.7.6"
   },
   "devDependencies": {
-    "esbuild": "^0.28.0"
+    "esbuild": "0.28.0"
   }
 }

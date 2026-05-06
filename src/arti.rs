@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use arti_client::{config::TorClientConfigBuilder, TorClient};
+use arti_client::config::TorClientConfigBuilder;
+use arti_client::TorClient;
 use tor_rtcompat::PreferredRuntime;
 
 pub type ArtiClient = TorClient<PreferredRuntime>;

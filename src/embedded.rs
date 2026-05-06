@@ -1,24 +1,31 @@
-use std::{borrow::Cow, path::Path, path::PathBuf, rc::Rc, sync::Arc, time::Duration};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context as _, Result};
 use deno_error::JsErrorBox;
-use deno_runtime::{
-    deno_core::{extension, resolve_url, v8, FastString, FsModuleLoader, ModuleSpecifier},
-    deno_fetch,
-    deno_fs::RealFs,
-    deno_node::{NodeRequireLoader, NodeRequireLoaderRc},
-    deno_permissions::{
-        OpenAccessKind, Permissions, PermissionsContainer, PermissionsOptions,
-        RuntimePermissionDescriptorParser,
-    },
-    deno_web::{BlobStore, InMemoryBroadcastChannel},
-    worker::{MainWorker, WorkerOptions, WorkerServiceOptions},
-    FeatureChecker,
+use deno_runtime::deno_core::{
+    extension, op2, serde_v8, v8, Extension, FastString, FsModuleLoader, JsBuffer, ModuleSpecifier,
+    OpState, PollEventLoopOptions, ToJsBuffer,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use deno_runtime::deno_fs::RealFs;
+use deno_runtime::deno_node::{NodeRequireLoader, NodeRequireLoaderRc};
+use deno_runtime::deno_permissions::{
+    OpenAccessKind, Permissions, PermissionsContainer, PermissionsOptions,
+    RuntimePermissionDescriptorParser,
+};
+use deno_runtime::deno_web::{BlobStore, InMemoryBroadcastChannel};
+use deno_runtime::worker::{MainWorker, WorkerOptions, WorkerServiceOptions};
+use deno_runtime::{deno_fetch, FeatureChecker};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 
-use crate::rpc::{ReverseEnvelope, TorRpcClient};
+use crate::railgun::reverse::{self, ReverseRequest, ReverseResponse};
+use crate::railgun::Artifact;
+use crate::rpc::TorRpcClient;
 
 #[derive(Debug)]
 struct NoNpm;
@@ -86,7 +93,7 @@ impl NodeRequireLoader for LocalNodeRequireLoader {
 }
 
 extension!(
-    undercover_node_state,
+    hermetic_node_state,
     state = |state| {
         let sys = sys_traits::impls::RealSys;
         let pkg_json_resolver =
@@ -111,104 +118,166 @@ extension!(
     }
 );
 
-pub struct EmbeddedRailgun {
-    worker: MainWorker,
-    next_call_id: u64,
+extension!(
+    hermetic_host_ops,
+    ops = [
+        op_hermetic_log,
+        op_hermetic_progress,
+        op_hermetic_read_artifact,
+        op_hermetic_write_artifact,
+        op_hermetic_artifact_exists,
+        op_hermetic_service_endpoint,
+        op_hermetic_reverse_request,
+        op_hermetic_workdir,
+    ],
+    esm_entry_point = "ext:hermetic_host_ops/hermetic_host_ops.js",
+    esm = [dir "src", "hermetic_host_ops.js"],
+    options = {
+        host_state: EmbeddedHostState,
+    },
+    state = |state, options| {
+        state.put(options.host_state);
+    }
+);
+
+pub struct EmbeddedHostState {
+    artifact: Artifact,
+    rpc_client: Option<TorRpcClient>,
 }
 
-impl EmbeddedRailgun {
-    /// Create an embedded Deno worker and load the generated Railgun bundle.
+impl EmbeddedHostState {
+    #[must_use]
+    pub fn new(artifact: Artifact) -> Self {
+        Self {
+            artifact,
+            rpc_client: None,
+        }
+    }
+}
+
+#[op2(fast)]
+fn op_hermetic_log(#[string] message: &str) {
+    tracing::debug!(target: "hermetic::runtime", "{message}");
+}
+
+#[op2(fast)]
+fn op_hermetic_progress(#[string] message: &str) {
+    tracing::info!(target: "hermetic::runtime", "{message}");
+}
+
+#[op2]
+#[string]
+fn op_hermetic_workdir(state: &mut OpState) -> String {
+    state
+        .borrow::<EmbeddedHostState>()
+        .artifact
+        .workdir()
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[op2]
+#[serde]
+fn op_hermetic_read_artifact(
+    state: &mut OpState,
+    #[string] relative_path: &str,
+) -> Result<ToJsBuffer, JsErrorBox> {
+    state
+        .borrow::<EmbeddedHostState>()
+        .artifact
+        .read(relative_path)
+        .map(ToJsBuffer::from)
+        .map_err(|err| JsErrorBox::generic(err.to_string()))
+}
+
+#[op2]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "op2 buffer arguments are owned"
+)]
+fn op_hermetic_write_artifact(
+    state: &mut OpState,
+    #[string] dir: &str,
+    #[string] relative_path: &str,
+    #[buffer] bytes: JsBuffer,
+) -> Result<(), JsErrorBox> {
+    state
+        .borrow::<EmbeddedHostState>()
+        .artifact
+        .write(dir, relative_path, bytes.as_ref())
+        .map_err(|err| JsErrorBox::generic(err.to_string()))
+}
+
+#[op2(fast)]
+fn op_hermetic_artifact_exists(state: &mut OpState, #[string] relative_path: &str) -> bool {
+    state
+        .borrow::<EmbeddedHostState>()
+        .artifact
+        .exists(relative_path)
+}
+
+#[op2]
+#[string]
+fn op_hermetic_service_endpoint(#[string] service: &str) -> Result<String, JsErrorBox> {
+    reverse::service_endpoint(service)
+        .map(str::to_owned)
+        .map_err(|err| JsErrorBox::generic(err.to_string()))
+}
+
+#[op2]
+#[serde]
+async fn op_hermetic_reverse_request(
+    state: Rc<RefCell<OpState>>,
+    #[serde] request: ReverseRequest,
+) -> Result<ReverseResponse, JsErrorBox> {
+    let rpc_client = {
+        let state = state.borrow();
+        state
+            .borrow::<EmbeddedHostState>()
+            .rpc_client
+            .clone()
+            .ok_or_else(|| JsErrorBox::generic("reverse request attempted without RPC client"))?
+    };
+    rpc_client
+        .handle_reverse_request(request)
+        .await
+        .map_err(|err| JsErrorBox::generic(format!("{err:#}")))
+}
+
+pub struct EmbeddedDeno {
+    worker: MainWorker,
+    invoke: v8::Global<v8::Function>,
+}
+
+impl EmbeddedDeno {
+    /// Create an embedded Deno worker and load the bundled runtime as ESM.
     ///
     /// # Errors
     ///
-    /// Returns an error if the workdir cannot be resolved, the generated bundle
-    /// cannot be read, or Deno worker initialization fails.
-    pub async fn new(workdir: &Path) -> Result<Self> {
-        let workdir = std::fs::canonicalize(workdir).context("resolving embedded workdir")?;
-        let main_module = resolve_url("file:///undercover-embedded-railgun.js")?;
-        let mut worker = create_worker(&main_module, &workdir)?;
-        let bundle_path = workdir.join("embedded/railgun_runtime.iife.js");
-        let bundle = std::fs::read_to_string(&bundle_path)
-            .with_context(|| format!("reading {}", bundle_path.display()))?;
-        let cwd = serde_json::to_string(&workdir.to_string_lossy())?;
-        worker.execute_script(
-            "undercover:embedded-bootstrap",
-            format!(
-                r#"
-globalThis.__undercover_workdir = {cwd};
-globalThis.__dirname = globalThis.__undercover_workdir + "/embedded";
-globalThis.__filename = globalThis.__dirname + "/railgun_runtime.iife.js";
-globalThis.__undercover_reverse = [];
-globalThis.__undercover_deno_fetch = globalThis.fetch;
-globalThis.__undercover_stringify = (value) => JSON.stringify(value, (_, item) =>
-  typeof item === "bigint" ? item.toString() : item
-);
-globalThis.__undercover_require_ready = import("node:module").then((module) => {{
-  globalThis.require = module.createRequire("file://" + globalThis.__undercover_workdir + "/railgun-runtime/runtime.mjs");
-}});
-async function __undercover_denied(op) {{
-  try {{
-    await op();
-    return false;
-  }} catch (_) {{
-    return true;
-  }}
-}}
-globalThis.__undercover_host = {{
-  writeLine(line) {{ globalThis.__undercover_reverse.push(JSON.parse(line)); }},
-  log(message) {{ console.error(message); }},
-  readArtifact(relativePath) {{
-    try {{
-      const path = `${{globalThis.__undercover_workdir}}/artifacts/${{relativePath}}`;
-      if (relativePath.endsWith(".json")) {{
-        return Deno.readTextFileSync(path);
-      }}
-      return Deno.readFileSync(path);
-    }} catch (_) {{
-      return null;
-    }}
-  }},
-  writeArtifact(dir, relativePath, item) {{
-    Deno.mkdirSync(`${{globalThis.__undercover_workdir}}/artifacts/${{dir}}`, {{ recursive: true }});
-    Deno.writeFileSync(`${{globalThis.__undercover_workdir}}/artifacts/${{relativePath}}`, item);
-  }},
-  artifactExists(relativePath) {{
-    try {{
-      Deno.statSync(`${{globalThis.__undercover_workdir}}/artifacts/${{relativePath}}`);
-      return true;
-    }} catch (_) {{
-      return false;
-    }}
-  }},
-  async permissionSmoke(params = {{}}) {{
-    const net = require("node:net");
-    const nodeNetHost = params.node_net_host ?? "127.0.0.1";
-    const nodeNetPort = params.node_net_port ?? 53;
-    return {{
-      fetch_denied: await __undercover_denied(() => globalThis.__undercover_deno_fetch("https://example.com")),
-      connect_denied: await __undercover_denied(() => Deno.connect({{ hostname: "1.1.1.1", port: 53 }})),
-      node_net_denied: await __undercover_denied(() => new Promise((resolve, reject) => {{
-        const socket = net.connect(nodeNetPort, nodeNetHost);
-        socket.once("connect", () => {{ socket.destroy(); resolve(); }});
-        socket.once("error", reject);
-        socket.setTimeout(1000, () => {{ socket.destroy(); reject(new Error("socket timeout")); }});
-      }})),
-      write_denied: await __undercover_denied(() => Deno.writeTextFile("/tmp/undercover-deny-write", "x")),
-      env_denied: await __undercover_denied(() => Deno.env.get("UNDERCOVER_FORBIDDEN_ENV")),
-      read_allowed: !await __undercover_denied(() => Deno.readTextFile(`${{globalThis.__undercover_workdir}}/artifacts/manifest`)),
-    }};
-  }},
-}};
-"#,
-            )
-            .into(),
-        )?;
-        worker.run_event_loop(false).await?;
-        worker.execute_script("undercover:embedded-bundle", bundle.into())?;
-        Ok(Self {
-            worker,
-            next_call_id: 1,
-        })
+    /// Returns an error if Deno worker initialization, module loading, module
+    /// evaluation, or export lookup fails.
+    pub async fn load_esm(
+        main_module: &ModuleSpecifier,
+        source: String,
+        permissions: PermissionsContainer,
+        host_state: EmbeddedHostState,
+    ) -> Result<Self> {
+        let mut worker = create_worker(
+            main_module,
+            permissions,
+            vec![hermetic_host_ops::init(host_state)],
+        );
+        let module_id = worker
+            .js_runtime
+            .load_main_es_module_from_code(main_module, source)
+            .await
+            .context("loading embedded ESM module")?;
+        worker
+            .evaluate_module(module_id)
+            .await
+            .context("evaluating embedded ESM module")?;
+        let invoke = get_module_export(&mut worker, module_id, "invoke")?;
+        Ok(Self { worker, invoke })
     }
 
     /// Call a Railgun runtime method without reverse RPC.
@@ -222,41 +291,7 @@ globalThis.__undercover_host = {{
         Req: Serialize,
         Res: DeserializeOwned,
     {
-        let id = self.next_call_id;
-        self.next_call_id += 1;
-        let method = serde_json::to_string(method)?;
-        let params = serde_json::to_string(&params)?;
-        self.worker.execute_script(
-            "undercover:embedded-call",
-            format!(
-                r"
-globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {params}).then(
-  (result) => {{ globalThis.__undercover_result_{id} = {{ ok: true, result }}; }},
-  (error) => {{ globalThis.__undercover_result_{id} = {{ ok: false, error: String(error?.stack ?? error) }}; }},
-);
-"
-            )
-            .into(),
-        )?;
-        self.worker.run_event_loop(false).await?;
-        let value = self.worker.execute_script(
-            "undercover:embedded-call-result",
-            format!("globalThis.__undercover_stringify(globalThis.__undercover_result_{id})")
-                .into(),
-        )?;
-        let json = v8_to_string(&mut self.worker, value)?;
-        let response: Value = serde_json::from_str(&json)?;
-        if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-            serde_json::from_value(response["result"].clone()).map_err(Into::into)
-        } else {
-            anyhow::bail!(
-                "embedded Railgun error: {}",
-                response
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown error")
-            )
-        }
+        self.call_inner(method, params, None).await
     }
 
     /// Call a Railgun runtime method while servicing reverse JSON-RPC/HTTP via Tor.
@@ -275,88 +310,63 @@ globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method}, {p
         Req: Serialize,
         Res: DeserializeOwned,
     {
-        let id = self.next_call_id;
-        self.next_call_id += 1;
-        let method_json = serde_json::to_string(method)?;
-        let params_json = serde_json::to_string(&params)?;
-        self.worker.execute_script(
-            "undercover:embedded-call-rpc",
-            format!(
-                r"
-globalThis.__undercover_result_{id} = undefined;
-globalThis.__undercover_call_{id} = UndercoverRailgunRuntime.handle({method_json}, {params_json}).then(
-  (result) => {{ globalThis.__undercover_result_{id} = {{ ok: true, result }}; }},
-  (error) => {{ globalThis.__undercover_result_{id} = {{ ok: false, error: String(error?.stack ?? error) }}; }},
-);
-"
-            )
-            .into(),
-        )?;
-
-        loop {
-            self.worker
-                .run_up_to_duration(Duration::from_millis(10))
-                .await?;
-
-            if let Some(response) = self.take_call_result(id)? {
-                return decode_call_response(&response);
-            }
-
-            while let Some(reverse) = self.take_reverse_request()? {
-                let (reverse_id, reverse) = reverse.into_request()?;
-                let result = rpc_client.handle_reverse_request(reverse).await;
-                let response = match result {
-                    Ok(result) => serde_json::json!({
-                        "undercover_reverse_rpc": true,
-                        "id": reverse_id,
-                        "result": result,
-                    }),
-                    Err(err) => serde_json::json!({
-                        "undercover_reverse_rpc": true,
-                        "id": reverse_id,
-                        "error": err.to_string(),
-                    }),
-                };
-                self.worker.execute_script(
-                    "undercover:embedded-reverse-response",
-                    format!(
-                        "UndercoverRailgunRuntime.handleReverseRpcResponse({});",
-                        serde_json::to_string(&response)?
-                    )
-                    .into(),
-                )?;
-            }
-        }
+        self.call_inner(method, params, Some(rpc_client)).await
     }
 
-    fn take_call_result(&mut self, id: u64) -> Result<Option<Value>> {
-        let value = self.worker.execute_script(
-            "undercover:embedded-result-poll",
-            format!(
-                r#"
-(() => {{
-  const result = globalThis.__undercover_result_{id};
-  if (result === undefined) return "null";
-  delete globalThis.__undercover_result_{id};
-  return globalThis.__undercover_stringify(result);
-}})()
-"#
-            )
-            .into(),
-        )?;
+    async fn call_inner<Req, Res>(
+        &mut self,
+        method: &str,
+        params: Req,
+        rpc_client: Option<TorRpcClient>,
+    ) -> Result<Res>
+    where
+        Req: Serialize,
+        Res: DeserializeOwned,
+    {
+        self.set_rpc_client(rpc_client);
+        let call_result = self.call_runtime(method, params).await;
+        self.set_rpc_client(None);
+        decode_call_response(&call_result?)
+    }
+
+    async fn call_runtime<Req>(&mut self, method: &str, params: Req) -> Result<Value>
+    where
+        Req: Serialize,
+    {
+        let args = self.encode_call_args(method, params)?;
+        let call = self.worker.js_runtime.call_with_args(&self.invoke, &args);
+        let value = self
+            .worker
+            .js_runtime
+            .with_event_loop_promise(call, PollEventLoopOptions::default())
+            .await?;
         let json = v8_to_string(&mut self.worker, value)?;
         serde_json::from_str(&json).map_err(Into::into)
     }
 
-    fn take_reverse_request(&mut self) -> Result<Option<ReverseEnvelope>> {
-        let value = self.worker.execute_script(
-            "undercover:embedded-reverse-poll",
-            r"JSON.stringify(globalThis.__undercover_reverse.shift() ?? null)"
-                .to_string()
-                .into(),
-        )?;
-        let json = v8_to_string(&mut self.worker, value)?;
-        serde_json::from_str(&json).map_err(Into::into)
+    fn encode_call_args<Req>(
+        &mut self,
+        method: &str,
+        params: Req,
+    ) -> Result<[v8::Global<v8::Value>; 2]>
+    where
+        Req: Serialize,
+    {
+        deno_runtime::deno_core::scope!(scope, self.worker.js_runtime);
+        let method = serde_v8::to_v8(scope, method)
+            .map_err(|err| anyhow!("encoding embedded method argument: {err}"))?;
+        let params = serde_v8::to_v8(scope, params)
+            .map_err(|err| anyhow!("encoding embedded params argument: {err}"))?;
+        Ok([
+            v8::Global::new(scope, method),
+            v8::Global::new(scope, params),
+        ])
+    }
+
+    fn set_rpc_client(&mut self, rpc_client: Option<TorRpcClient>) {
+        let op_state = self.worker.js_runtime.op_state();
+        let mut state = op_state.borrow_mut();
+        state.borrow_mut::<EmbeddedHostState>().rpc_client = rpc_client;
     }
 }
 
@@ -377,32 +387,24 @@ where
     }
 }
 
-fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWorker> {
+/// Build a Deno permissions container from explicit permission options.
+///
+/// # Errors
+///
+/// Returns an error if Deno rejects the permission configuration.
+pub fn permissions_from_options(options: &PermissionsOptions) -> Result<PermissionsContainer> {
     let parser = Arc::new(RuntimePermissionDescriptorParser::new(
         sys_traits::impls::RealSys,
     ));
-    let artifacts = workdir.join("artifacts").to_string_lossy().to_string();
-    let embedded = workdir.join("embedded").to_string_lossy().to_string();
-    let wasm_packages = workdir
-        .join("railgun-runtime/node_modules/@railgun-community")
-        .to_string_lossy()
-        .to_string();
-    let permissions = Permissions::from_options(
-        parser.as_ref(),
-        &PermissionsOptions {
-            allow_read: Some(vec![artifacts.clone(), embedded, wasm_packages]),
-            allow_write: Some(vec![artifacts]),
-            allow_env: Some(vec![
-                "WS_NO_BUFFER_UTIL".to_string(),
-                "WS_NO_UTF_8_VALIDATE".to_string(),
-                "READABLE_STREAM".to_string(),
-                "NODE_ENV".to_string(),
-            ]),
-            allow_sys: Some(vec!["cpus".to_string()]),
-            prompt: false,
-            ..Default::default()
-        },
-    )?;
+    let permissions = Permissions::from_options(parser.as_ref(), options)?;
+    Ok(PermissionsContainer::new(parser, permissions))
+}
+
+fn create_worker(
+    main_module: &ModuleSpecifier,
+    permissions: PermissionsContainer,
+    extensions: Vec<Extension>,
+) -> MainWorker {
     let services = WorkerServiceOptions::<NoNpm, NoNpm, sys_traits::impls::RealSys> {
         blob_store: Arc::new(BlobStore::default()),
         broadcast_channel: InMemoryBroadcastChannel::default(),
@@ -412,7 +414,7 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWo
         module_loader: Rc::new(FsModuleLoader),
         node_services: None,
         npm_process_state_provider: None,
-        permissions: PermissionsContainer::new(parser, permissions),
+        permissions,
         root_cert_store_provider: None,
         fetch_dns_resolver: deno_fetch::dns::Resolver::default(),
         shared_array_buffer_store: None,
@@ -421,12 +423,30 @@ fn create_worker(main_module: &ModuleSpecifier, workdir: &Path) -> Result<MainWo
         bundle_provider: None,
     };
     let mut options = WorkerOptions::default();
-    options.extensions.push(undercover_node_state::init());
-    Ok(MainWorker::bootstrap_from_options(
-        main_module,
-        services,
-        options,
-    ))
+    options.extensions.extend(extensions);
+    options.extensions.push(hermetic_node_state::init());
+    MainWorker::bootstrap_from_options(main_module, services, options)
+}
+
+fn get_module_export(
+    worker: &mut MainWorker,
+    module_id: deno_runtime::deno_core::ModuleId,
+    export_name: &str,
+) -> Result<v8::Global<v8::Function>> {
+    let namespace = worker
+        .js_runtime
+        .get_module_namespace(module_id)
+        .context("getting embedded module namespace")?;
+    deno_runtime::deno_core::scope!(scope, worker.js_runtime);
+    let namespace = v8::Local::new(scope, namespace);
+    let function_key =
+        v8::String::new(scope, export_name).ok_or_else(|| anyhow!("allocating V8 string"))?;
+    let value = namespace
+        .get(scope, function_key.into())
+        .ok_or_else(|| anyhow!("module export {export_name} is missing"))?;
+    let function = v8::Local::<v8::Function>::try_from(value)
+        .map_err(|_| anyhow!("module export {export_name} is not a function"))?;
+    Ok(v8::Global::new(scope, function))
 }
 
 fn v8_to_string(worker: &mut MainWorker, value: v8::Global<v8::Value>) -> Result<String> {

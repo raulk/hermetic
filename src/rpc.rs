@@ -1,21 +1,24 @@
 use alloy_network::{Ethereum, NetworkWallet};
 use alloy_provider::{Provider, ProviderBuilder, RootProvider};
 use alloy_rpc_client::RpcClient;
-use anyhow::Result;
-use anyhow::{anyhow, Context as _};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use anyhow::{anyhow, Context as _, Result};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use http_body_util::{BodyExt, Full};
-use hyper_util::{client::legacy::Client, rt::TokioExecutor};
-use serde::{Deserialize, Serialize};
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
+use serde_json::value::to_raw_value;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::str::FromStr;
 
-use crate::{
-    arti::ArtiClient,
-    transport::{ArtiConnector, ArtiJsonRpcTransport},
+use crate::arti::ArtiClient;
+use crate::railgun::reverse::{
+    self, ReverseHttpRequest, ReverseHttpResponse, ReverseRequest, ReverseResponse,
 };
+use crate::transport::{ArtiConnector, ArtiJsonRpcTransport};
 
 #[derive(Clone)]
 pub struct TorRpcClient {
@@ -49,49 +52,17 @@ impl TorRpcClient {
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP request fails, the response is not
-    /// successful, or the JSON-RPC response contains an error.
+    /// Returns an error if Alloy cannot encode, send, or decode the JSON-RPC
+    /// request.
     pub async fn raw_request(&self, method: &str, params: Value) -> Result<Value> {
         tracing::info!(rpc_method = method, "reverse JSON-RPC request through Tor");
-        let client: Client<ArtiConnector, Full<Bytes>> =
-            Client::builder(TokioExecutor::new()).build(ArtiConnector::new(self.tor.clone()));
-        let body = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1_u64,
-            "method": method,
-            "params": params,
-        });
-        let body = serde_json::to_vec(&body).context("encoding reverse JSON-RPC request")?;
-        let request = http::Request::post(self.rpc_url.clone())
-            .header(http::header::CONTENT_TYPE, "application/json")
-            .body(Full::new(Bytes::from(body)))
-            .context("building reverse JSON-RPC request")?;
-        let response = client
-            .request(request)
+        let params = to_raw_value(&params).context("encoding reverse JSON-RPC params")?;
+        let result = self
+            .provider()
+            .raw_request_dyn(Cow::Owned(method.to_owned()), &params)
             .await
             .context("sending reverse JSON-RPC request through Tor")?;
-        let status = response.status();
-        let bytes = response
-            .into_body()
-            .collect()
-            .await
-            .context("reading reverse JSON-RPC response")?
-            .to_bytes();
-        if !status.is_success() {
-            return Err(anyhow!(
-                "reverse JSON-RPC HTTP status {status}: {}",
-                String::from_utf8_lossy(&bytes)
-            ));
-        }
-        let response: Value =
-            serde_json::from_slice(&bytes).context("decoding reverse JSON-RPC response")?;
-        if let Some(error) = response.get("error") {
-            return Err(anyhow!("reverse JSON-RPC error: {error}"));
-        }
-        response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| anyhow!("reverse JSON-RPC response had no result"))
+        serde_json::from_str(result.get()).context("decoding reverse JSON-RPC result")
     }
 
     /// Send one reverse HTTP request through Tor.
@@ -100,13 +71,14 @@ impl TorRpcClient {
     ///
     /// Returns an error if the URL, method, headers, request body, transport, or
     /// response body cannot be processed.
-    pub async fn raw_http_request(
+    pub async fn raw_service_http_request(
         &self,
         request: ReverseHttpRequest,
     ) -> Result<ReverseHttpResponse> {
-        let uri: Uri = request.url.parse().context("parsing reverse HTTP URL")?;
+        let uri = reverse::service_uri(&request.service, request.path.as_deref())?;
         tracing::info!(
             http_method = %request.method,
+            http_service = %request.service,
             http_uri = %uri,
             "reverse HTTP request through Tor"
         );
@@ -161,81 +133,18 @@ impl TorRpcClient {
     ///
     /// Returns an error if the reverse request is malformed or the Tor-backed
     /// network request fails.
-    pub async fn handle_reverse_request(&self, request: ReverseRequest) -> Result<Value> {
+    pub async fn handle_reverse_request(&self, request: ReverseRequest) -> Result<ReverseResponse> {
         match request {
-            ReverseRequest::JsonRpc { method, params } => self.raw_request(&method, params).await,
-            ReverseRequest::Http(request) => self
-                .raw_http_request(request)
+            ReverseRequest::JsonRpc { method, params } => self
+                .raw_request(&method, params)
                 .await
-                .and_then(|response| serde_json::to_value(response).map_err(Into::into)),
+                .map(ReverseResponse::JsonRpc),
+            ReverseRequest::ServiceHttp { request } => self
+                .raw_service_http_request(request)
+                .await
+                .map(ReverseResponse::Http),
         }
     }
-}
-
-#[derive(Debug)]
-pub enum ReverseRequest {
-    JsonRpc { method: String, params: Value },
-    Http(ReverseHttpRequest),
-}
-
-impl TryFrom<RawReverseRequest> for ReverseRequest {
-    type Error = anyhow::Error;
-
-    fn try_from(request: RawReverseRequest) -> Result<Self> {
-        if request.method == "__http_request" {
-            let request =
-                serde_json::from_value(request.params).context("decoding reverse HTTP request")?;
-            Ok(Self::Http(request))
-        } else {
-            Ok(Self::JsonRpc {
-                method: request.method,
-                params: request.params,
-            })
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ReverseEnvelope {
-    pub id: u64,
-    #[serde(flatten)]
-    request: RawReverseRequest,
-}
-
-impl ReverseEnvelope {
-    /// Decode the typed request carried by this reverse envelope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if an HTTP reverse request has malformed parameters.
-    pub fn into_request(self) -> Result<(u64, ReverseRequest)> {
-        let request = self.request.try_into()?;
-        Ok((self.id, request))
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct RawReverseRequest {
-    method: String,
-    #[serde(default)]
-    params: Value,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ReverseHttpRequest {
-    pub url: String,
-    pub method: String,
-    #[serde(default)]
-    pub headers: Vec<(String, String)>,
-    #[serde(default)]
-    pub body_base64: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ReverseHttpResponse {
-    pub status: u16,
-    pub headers: Vec<(String, String)>,
-    pub body_base64: String,
 }
 
 fn copy_headers(headers: &[(String, String)], target: &mut HeaderMap) -> Result<()> {

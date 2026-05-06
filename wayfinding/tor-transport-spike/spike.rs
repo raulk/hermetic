@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use alloy_provider::Provider;
 use anyhow::Context as _;
 use http::Uri;
-use undercover::{arti, rpc::TorRpcClient, transport::TOR_CONNECT_CALLS};
+use hermetic::{arti, rpc::TorRpcClient, transport::TOR_CONNECT_CALLS};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,8 +15,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "https://ethereum-sepolia-rpc.publicnode.com".to_owned());
     let rpc_url: Uri = rpc.parse().context("parsing RPC URL")?;
 
-    let state_dir = std::env::temp_dir().join("undercover-spike-arti-state");
-    let cache_dir = std::env::temp_dir().join("undercover-spike-arti-cache");
+    let state_dir = std::env::temp_dir().join("hermetic-spike-arti-state");
+    let cache_dir = std::env::temp_dir().join("hermetic-spike-arti-cache");
     let tor = arti::bootstrap(&state_dir, &cache_dir)
         .await
         .context("bootstrapping Tor")?;

@@ -7,7 +7,7 @@ use clap::Args;
 
 #[derive(Clone, Debug, Args)]
 pub struct PublicSignerArgs {
-    #[arg(long, env = "UNDERCOVER_PRIVATE_KEY", conflicts_with = "ledger")]
+    #[arg(long, env = "HERMETIC_PRIVATE_KEY", conflicts_with = "ledger")]
     private_key: Option<String>,
     #[arg(long)]
     ledger: bool,
@@ -33,7 +33,7 @@ impl PublicSignerArgs {
         }
         anyhow::ensure!(
             self.ledger,
-            "choose a public signer with --private-key/UNDERCOVER_PRIVATE_KEY or --ledger"
+            "choose a public signer with --private-key/HERMETIC_PRIVATE_KEY or --ledger"
         );
         let path = self
             .ledger_path

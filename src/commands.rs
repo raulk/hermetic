@@ -6,14 +6,12 @@ use alloy_provider::Provider;
 use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context as _, Result};
 
-use crate::{
-    arti,
-    cli::{Command, RailgunWalletArgs, TorArgs},
-    railgun::{PopulatedTransaction, RailgunRuntime},
-    rpc,
-    signer::default_signer_address,
-    transport::TOR_CONNECT_CALLS,
-};
+use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelectionArgs};
+use crate::railgun::manifest::{validate_label, WalletManifest, WalletRecord};
+use crate::railgun::{PopulatedTransaction, RailgunRuntime};
+use crate::signer::default_signer_address;
+use crate::transport::TOR_CONNECT_CALLS;
+use crate::{arti, rpc};
 
 /// Dispatch a parsed CLI command.
 ///
@@ -24,14 +22,11 @@ use crate::{
 pub async fn run(command: Command) -> Result<()> {
     match command {
         Command::Ping { tor, rpc } => ping(tor, rpc).await,
-        Command::RuntimeSmoke { workdir } => {
+        Command::Doctor { workdir } => {
             let mut runtime = RailgunRuntime::new(&workdir).await?;
-            runtime_smoke(&mut runtime).await
+            doctor(&mut runtime).await
         }
-        Command::LoadWallet { workdir, railgun } => {
-            let mut runtime = RailgunRuntime::new(&workdir).await?;
-            load_wallet(&mut runtime, &railgun).await
-        }
+        Command::Wallet { command } => wallet_command(command).await,
         Command::SignerAddress { signer } => {
             let wallet = signer.wallet().await?;
             println!("address={}", default_signer_address(&wallet));
@@ -42,17 +37,20 @@ pub async fn run(command: Command) -> Result<()> {
             workdir,
             rpc,
             signer,
-            railgun,
+            wallet,
             amount_wei,
             dry_run,
         } => {
-            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
+            let mut runtime = RailgunRuntime::new(&workdir)
+                .await?
+                .with_rpc_client(rpc_client.clone());
             shield(
                 &mut runtime,
-                tor,
-                rpc,
+                &workdir,
+                rpc_client,
                 signer,
-                &railgun,
+                &wallet,
                 amount_wei,
                 dry_run,
             )
@@ -62,24 +60,22 @@ pub async fn run(command: Command) -> Result<()> {
             tor,
             workdir,
             rpc,
-            railgun,
-            creation_block,
+            wallet,
         } => {
             let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
             let mut runtime = RailgunRuntime::new(&workdir)
                 .await?
                 .with_rpc_client(rpc_client);
-            balance(&mut runtime, &railgun, creation_block).await
+            balance(&mut runtime, &workdir, &wallet).await
         }
         Command::Unshield {
             tor,
             workdir,
             rpc,
             signer,
-            railgun,
+            wallet,
             amount_wei,
             recipient,
-            creation_block,
             dry_run,
         } => {
             let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
@@ -87,12 +83,12 @@ pub async fn run(command: Command) -> Result<()> {
                 .await?
                 .with_rpc_client(rpc_client.clone());
             let input = UnshieldInput {
+                workdir,
                 rpc_client,
                 signer,
-                railgun,
+                wallet,
                 amount_wei,
                 recipient,
-                creation_block,
                 dry_run,
             };
             unshield(&mut runtime, input).await
@@ -102,17 +98,15 @@ pub async fn run(command: Command) -> Result<()> {
 
 async fn shield(
     runtime: &mut RailgunRuntime,
-    tor: TorArgs,
-    rpc: http::Uri,
+    workdir: &std::path::Path,
+    rpc_client: rpc::TorRpcClient,
     signer: crate::signer::PublicSignerArgs,
-    railgun: &RailgunWalletArgs,
+    wallet: &WalletSelectionArgs,
     amount_wei: U256,
     dry_run: bool,
 ) -> Result<()> {
     let public_wallet = signer.wallet().await?;
-    let railgun_wallet = runtime
-        .load_wallet(&railgun.railgun_mnemonic, &railgun.encryption_key, None)
-        .await?;
+    let railgun_wallet = load_selected_wallet(runtime, workdir, wallet).await?;
     let populated = runtime
         .populate_shield_base_token(&railgun_wallet.shielded_address, &amount_wei)
         .await?;
@@ -130,28 +124,20 @@ async fn shield(
         return Ok(());
     }
 
-    let provider = bootstrap_rpc_client(tor, rpc)
-        .await?
-        .wallet_provider(public_wallet);
+    let provider = rpc_client.wallet_provider(public_wallet);
     send_transaction(provider, from, tx, "shield base-token transaction").await
 }
 
 async fn balance(
     runtime: &mut RailgunRuntime,
-    railgun: &RailgunWalletArgs,
-    creation_block: u64,
+    workdir: &std::path::Path,
+    wallet: &WalletSelectionArgs,
 ) -> Result<()> {
-    let wallet = runtime
-        .load_wallet(
-            &railgun.railgun_mnemonic,
-            &railgun.encryption_key,
-            Some(creation_block),
-        )
-        .await?;
-    let refreshed = runtime.refresh_balance(&wallet.wallet_id).await?;
+    let railgun_wallet = load_selected_wallet(runtime, workdir, wallet).await?;
+    let refreshed = runtime.refresh_balance(&railgun_wallet.wallet_id).await?;
 
-    println!("wallet_id={}", wallet.wallet_id);
-    println!("shielded_address={}", wallet.shielded_address);
+    println!("wallet_id={}", railgun_wallet.wallet_id);
+    println!("shielded_address={}", railgun_wallet.shielded_address);
     println!("token_address={}", refreshed.token_address);
     println!("balance={}", refreshed.balance);
     println!("spendable_balance={}", refreshed.spendable_balance);
@@ -159,12 +145,12 @@ async fn balance(
 }
 
 struct UnshieldInput {
+    workdir: std::path::PathBuf,
     rpc_client: rpc::TorRpcClient,
     signer: crate::signer::PublicSignerArgs,
-    railgun: RailgunWalletArgs,
+    wallet: WalletSelectionArgs,
     amount_wei: U256,
     recipient: Option<String>,
-    creation_block: u64,
     dry_run: bool,
 }
 
@@ -172,27 +158,22 @@ async fn unshield(runtime: &mut RailgunRuntime, input: UnshieldInput) -> Result<
     let public_wallet = input.signer.wallet().await?;
     let from = default_signer_address(&public_wallet);
     let recipient = input.recipient.unwrap_or_else(|| from.to_string());
-    let railgun_wallet = runtime
-        .load_wallet(
-            &input.railgun.railgun_mnemonic,
-            &input.railgun.encryption_key,
-            Some(input.creation_block),
-        )
-        .await?;
+    let railgun_wallet = load_selected_wallet(runtime, &input.workdir, &input.wallet).await?;
     let populated = runtime
         .prepare_unshield_base_token(
             &railgun_wallet.wallet_id,
             &recipient,
-            &input.railgun.encryption_key,
+            &input.wallet.key.encryption_key,
             &input.amount_wei,
         )
         .await?;
+    let tx = parse_populated_transaction(&populated)?;
 
     println!("wallet_id={}", railgun_wallet.wallet_id);
     println!("shielded_address={}", railgun_wallet.shielded_address);
     println!("to={}", populated.to);
     println!("value={}", populated.value);
-    println!("data_len={}", populated.data.len() / 2);
+    println!("data_len={}", tx.data.len());
     println!("from={from}");
     println!("recipient={recipient}");
     println!("amount_wei={}", input.amount_wei);
@@ -202,7 +183,6 @@ async fn unshield(runtime: &mut RailgunRuntime, input: UnshieldInput) -> Result<
         return Ok(());
     }
 
-    let tx = parse_populated_transaction(&populated)?;
     let provider = input.rpc_client.wallet_provider(public_wallet);
     send_transaction(provider, from, tx, "unshield base-token transaction").await
 }
@@ -221,7 +201,7 @@ async fn ping(tor: TorArgs, rpc_url: http::Uri) -> Result<()> {
     ensure_tor_was_used("provider call completed")
 }
 
-async fn runtime_smoke(runtime: &mut RailgunRuntime) -> Result<()> {
+async fn doctor(runtime: &mut RailgunRuntime) -> Result<()> {
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").context("binding local probe socket")?;
     let node_net_port = listener.local_addr().context("local listener addr")?.port();
@@ -250,9 +230,56 @@ async fn runtime_smoke(runtime: &mut RailgunRuntime) -> Result<()> {
     Ok(())
 }
 
-async fn load_wallet(runtime: &mut RailgunRuntime, railgun: &RailgunWalletArgs) -> Result<()> {
+async fn wallet_command(command: WalletCommand) -> Result<()> {
+    match command {
+        WalletCommand::Import {
+            workdir,
+            label,
+            railgun,
+        } => {
+            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let wallet = load_wallet(&mut runtime, &railgun).await?;
+            upsert_wallet_record(&workdir, &label, wallet)?;
+            Ok(())
+        }
+        WalletCommand::Create {
+            workdir,
+            label,
+            railgun,
+        } => {
+            validate_label(&label)?;
+            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let wallet = runtime.create_wallet(&railgun.encryption_key).await?;
+            println!("mnemonic={}", wallet.mnemonic);
+            upsert_wallet_record(
+                &workdir,
+                &label,
+                crate::railgun::LoadedWallet {
+                    wallet_id: wallet.wallet_id,
+                    shielded_address: wallet.shielded_address,
+                },
+            )?;
+            Ok(())
+        }
+        WalletCommand::List { workdir } => {
+            let manifest = WalletManifest::load(&workdir)?;
+            for wallet in manifest.wallets {
+                println!(
+                    "label={} wallet_id={} shielded_address={}",
+                    wallet.label, wallet.wallet_id, wallet.shielded_address
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn load_wallet(
+    runtime: &mut RailgunRuntime,
+    railgun: &RailgunImportArgs,
+) -> Result<crate::railgun::LoadedWallet> {
     let wallet = runtime
-        .load_wallet(&railgun.railgun_mnemonic, &railgun.encryption_key, None)
+        .load_wallet(&railgun.railgun_mnemonic, &railgun.key.encryption_key)
         .await?;
     println!("wallet_id={}", wallet.wallet_id);
     println!("shielded_address={}", wallet.shielded_address);
@@ -260,6 +287,34 @@ async fn load_wallet(runtime: &mut RailgunRuntime, railgun: &RailgunWalletArgs) 
         wallet.shielded_address.starts_with("0zk"),
         "embedded runtime returned non-Railgun address"
     );
+    Ok(wallet)
+}
+
+async fn load_selected_wallet(
+    runtime: &mut RailgunRuntime,
+    workdir: &std::path::Path,
+    selection: &WalletSelectionArgs,
+) -> Result<crate::railgun::LoadedWallet> {
+    let manifest = WalletManifest::load(workdir)?;
+    let record = manifest.select(&selection.wallet)?;
+    runtime
+        .load_wallet_by_id(&record.wallet_id, &selection.key.encryption_key)
+        .await
+}
+
+fn upsert_wallet_record(
+    workdir: &std::path::Path,
+    label: &str,
+    wallet: crate::railgun::LoadedWallet,
+) -> Result<()> {
+    validate_label(label)?;
+    let mut manifest = WalletManifest::load(workdir)?;
+    manifest.upsert(WalletRecord {
+        label: label.to_owned(),
+        wallet_id: wallet.wallet_id,
+        shielded_address: wallet.shielded_address,
+    });
+    manifest.save(workdir)?;
     Ok(())
 }
 
@@ -276,6 +331,7 @@ struct ParsedTransaction {
     to: Address,
     data: Bytes,
     value: U256,
+    gas_limit: Option<u64>,
 }
 
 fn parse_populated_transaction(tx: &PopulatedTransaction) -> Result<ParsedTransaction> {
@@ -283,6 +339,12 @@ fn parse_populated_transaction(tx: &PopulatedTransaction) -> Result<ParsedTransa
         to: tx.to.parse().context("parsing Railgun tx.to")?,
         data: tx.data.parse().context("parsing Railgun tx.data")?,
         value: U256::from_str_radix(&tx.value, 10).context("parsing Railgun tx.value")?,
+        gas_limit: tx
+            .gas_limit
+            .as_deref()
+            .map(str::parse)
+            .transpose()
+            .context("parsing Railgun tx.gas_limit")?,
     })
 }
 
@@ -292,21 +354,35 @@ async fn send_transaction(
     tx: ParsedTransaction,
     label: &str,
 ) -> Result<()> {
+    let mut request = TransactionRequest::default()
+        .from(from)
+        .to(tx.to)
+        .value(tx.value)
+        .input(tx.data.into());
+    if let Some(gas_limit) = tx.gas_limit {
+        request = request.gas_limit(gas_limit);
+    }
+    let gas_limit = provider
+        .estimate_gas(request.clone())
+        .await
+        .with_context(|| format!("estimating gas for {label}"))?;
+    let gas_price = provider
+        .get_gas_price()
+        .await
+        .context("fetching current gas price")?;
+    let max_cost = tx.value + U256::from(gas_limit) * U256::from(gas_price);
     let balance = provider
         .get_balance(from)
         .await
         .context("checking signer balance")?;
     println!("public_balance={balance}");
+    println!("estimated_gas={gas_limit}");
+    println!("gas_price={gas_price}");
+    println!("max_total_cost={max_cost}");
     anyhow::ensure!(
-        balance > tx.value,
-        "signer has insufficient Sepolia ETH: address {from} balance {balance}, transaction value {}",
-        tx.value
+        balance >= max_cost,
+        "signer has insufficient Sepolia ETH: address {from} balance {balance}, max transaction cost {max_cost}",
     );
-    let request = TransactionRequest::default()
-        .from(from)
-        .to(tx.to)
-        .value(tx.value)
-        .input(tx.data.into());
     let pending = provider
         .send_transaction(request)
         .await
