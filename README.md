@@ -59,6 +59,18 @@ The doctor command verifies that the Railgun SDK loads under embedded Deno and
 that Deno `fetch`, `Deno.connect`, `node:net`, writes outside artifacts, and
 broad env reads are denied while artifact reads are allowed.
 
+## Environment
+
+Secrets can come from the shell or from a `.env` file in the working
+directory (see `.env.example`). Shell variables override file values.
+The recognized variables are:
+
+- `HERMETIC_RAILGUN_ENCRYPTION_KEY`: operator-supplied SDK wallet key.
+- `HERMETIC_RAILGUN_MNEMONIC`: Railgun mnemonic for `wallet import`.
+- `HERMETIC_PRIVATE_KEY`: hex private key for the public gas-payer EOA.
+
+`.env` is gitignored.
+
 ## Commands
 
 Check the public signer address:
