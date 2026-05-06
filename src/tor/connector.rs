@@ -1,15 +1,18 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, Context as _};
 use arti_client::IntoTorAddr;
+use bytes::Bytes;
 use http::Uri;
+use http_body_util::Full;
 use hyper_util::client::legacy::connect::Connected;
-use hyper_util::rt::TokioIo;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::{TokioExecutor, TokioIo};
 use rustls::pki_types::ServerName;
-use rustls::RootCertStore;
+use rustls::{ClientConfig, RootCertStore};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
@@ -19,6 +22,29 @@ use super::ArtiClient;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
+/// Build a hyper Client wired to a fresh `ArtiConnector`. The connector
+/// holds the per-process cached `ClientConfig` so the cert store is not
+/// rebuilt per call.
+#[must_use]
+pub fn arti_hyper_client(arti: &ArtiClient) -> Client<ArtiConnector, Full<Bytes>> {
+    Client::builder(TokioExecutor::new()).build(ArtiConnector::new(arti.clone()))
+}
+
+fn shared_client_config() -> Arc<ClientConfig> {
+    static CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut roots = RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            Arc::new(
+                ClientConfig::builder()
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
 #[derive(Clone)]
 pub struct ArtiConnector {
     tor: ArtiClient,
@@ -27,16 +53,9 @@ pub struct ArtiConnector {
 
 impl ArtiConnector {
     pub fn new(tor: ArtiClient) -> Self {
-        let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-        let tls_config = rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-
         Self {
             tor,
-            tls: TlsConnector::from(Arc::new(tls_config)),
+            tls: TlsConnector::from(shared_client_config()),
         }
     }
 }

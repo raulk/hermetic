@@ -212,8 +212,12 @@ async function quickSyncWalletState(chain) {
   trace(
     `quick sync events commitments=${commitmentEvents.length} unshields=${unshieldEvents.length} nullifiers=${nullifierEvents.length}`,
   );
-  await engine.unshieldListener(TXID_VERSION, chain, unshieldEvents);
-  await engine.nullifierListener(TXID_VERSION, chain, nullifierEvents);
+  // unshield/nullifier listeners are independent of each other; commitment
+  // must follow because updateTreesFromWriteQueue depends on its output.
+  await Promise.all([
+    engine.unshieldListener(TXID_VERSION, chain, unshieldEvents),
+    engine.nullifierListener(TXID_VERSION, chain, nullifierEvents),
+  ]);
   await engine.commitmentListener(
     TXID_VERSION,
     chain,

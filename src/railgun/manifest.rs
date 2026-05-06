@@ -12,6 +12,16 @@ pub struct WalletRecord {
     pub shielded_address: String,
 }
 
+impl From<(String, crate::railgun::LoadedWallet)> for WalletRecord {
+    fn from((label, wallet): (String, crate::railgun::LoadedWallet)) -> Self {
+        Self {
+            label,
+            wallet_id: wallet.wallet_id,
+            shielded_address: wallet.shielded_address,
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct WalletManifest {
     pub wallets: Vec<WalletRecord>,
@@ -25,13 +35,14 @@ impl WalletManifest {
     /// Returns an error when the manifest exists but cannot be read or parsed.
     pub fn load(workdir: &Path) -> Result<Self> {
         let path = workdir.join(MANIFEST_PATH);
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let manifest: Self = serde_json::from_slice(&bytes)
-            .with_context(|| format!("parsing {}", path.display()))?;
-        Ok(manifest)
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
+        };
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
     }
 
     /// Persist the wallet manifest under the artifact directory.

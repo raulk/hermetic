@@ -4,7 +4,8 @@
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use alloy_provider::Provider;
+use alloy_network::Ethereum;
+use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context as _, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -12,13 +13,12 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use serde::{Deserialize, Serialize};
 use serde_json::value::to_raw_value;
 use serde_json::Value;
 
 use crate::eth::rpc as eth_rpc;
-use crate::tor::connector::ArtiConnector;
+use crate::tor::connector::{arti_hyper_client, ArtiConnector};
 use crate::tor::services::{self, ReverseHttpRequest, ReverseHttpResponse};
 use crate::tor::ArtiClient;
 
@@ -52,25 +52,21 @@ impl TryFrom<Value> for ReverseRequest {
 }
 
 /// Services reverse JSON-RPC and reverse HTTP requests from the embedded
-/// runtime through Rust-owned Tor egress. One instance per command; the
-/// hyper Client is cached so HTTP keep-alive can amortize across the many
-/// requests a single Railgun call makes.
+/// runtime through Rust-owned Tor egress. One instance per command; both
+/// the Alloy provider and the hyper Client are cached so connection
+/// pooling amortizes across the many requests a single Railgun call makes.
 #[derive(Clone)]
 pub struct ReverseRpcService {
-    arti: ArtiClient,
-    rpc_url: Uri,
+    provider: RootProvider<Ethereum>,
     client: Client<ArtiConnector, Full<Bytes>>,
 }
 
 impl ReverseRpcService {
     #[must_use]
-    pub fn new(arti: ArtiClient, rpc_url: Uri) -> Self {
-        let connector = ArtiConnector::new(arti.clone());
-        let client = Client::builder(TokioExecutor::new()).build(connector);
+    pub fn new(arti: &ArtiClient, rpc_url: Uri) -> Self {
         Self {
-            arti,
-            rpc_url,
-            client,
+            provider: eth_rpc::provider(arti, rpc_url),
+            client: arti_hyper_client(arti),
         }
     }
 
@@ -95,8 +91,8 @@ impl ReverseRpcService {
     async fn json_rpc(&self, method: &str, params: Value) -> Result<Value> {
         tracing::info!(rpc_method = method, "reverse JSON-RPC request through Tor");
         let params = to_raw_value(&params).context("encoding reverse JSON-RPC params")?;
-        let provider = eth_rpc::provider(&self.arti, self.rpc_url.clone());
-        let result = provider
+        let result = self
+            .provider
             .raw_request_dyn(Cow::Owned(method.to_owned()), &params)
             .await
             .context("sending reverse JSON-RPC request through Tor")?;

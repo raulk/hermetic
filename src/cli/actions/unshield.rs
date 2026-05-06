@@ -6,13 +6,11 @@ use crate::cli::args::{TorArgs, WalletSelectionArgs, WorkdirArgs};
 use crate::eth::rpc as eth_rpc;
 use crate::eth::signer::{default_signer_address, PublicSignerArgs};
 use crate::eth::tx::{parse_populated_transaction, send_transaction};
-use crate::railgun::reverse::ReverseRpcService;
-use crate::railgun::RailgunRuntime;
 
-use super::load_selected_wallet;
+use super::{bootstrap_connected, load_selected_wallet};
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+pub(crate) async fn run(
     tor: TorArgs,
     workdir: WorkdirArgs,
     rpc: Uri,
@@ -22,11 +20,7 @@ pub async fn run(
     recipient: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
-    let arti = tor.bootstrap_arti().await?;
-    let reverse = ReverseRpcService::new(arti.clone(), rpc.clone());
-    let mut runtime = RailgunRuntime::new(&workdir.workdir)
-        .await?
-        .connect(reverse);
+    let (arti, mut runtime) = bootstrap_connected(tor, &workdir, rpc.clone()).await?;
 
     let public_wallet = signer.wallet().await?;
     let from = default_signer_address(&public_wallet);
@@ -44,8 +38,8 @@ pub async fn run(
 
     println!("wallet_id={}", railgun_wallet.wallet_id);
     println!("shielded_address={}", railgun_wallet.shielded_address);
-    println!("to={}", populated.to);
-    println!("value={}", populated.value);
+    println!("to={}", tx.to);
+    println!("value={}", tx.value);
     println!("data_len={}", tx.data.len());
     println!("from={from}");
     println!("recipient={recipient}");

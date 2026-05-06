@@ -3,7 +3,7 @@ use anyhow::{Context as _, Result};
 use crate::cli::args::WorkdirArgs;
 use crate::railgun::RailgunRuntime;
 
-pub async fn run(workdir: WorkdirArgs) -> Result<()> {
+pub(crate) async fn run(workdir: WorkdirArgs) -> Result<()> {
     let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
     let listener =
         std::net::TcpListener::bind("127.0.0.1:0").context("binding local probe socket")?;

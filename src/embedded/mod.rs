@@ -56,10 +56,6 @@ impl EmbeddedDeno {
 
     /// Call a Railgun runtime method.
     ///
-    /// If a `ReverseRpcService` was previously installed via `set_reverse`,
-    /// the embedded runtime can use it for reverse JSON-RPC and HTTP through
-    /// Tor; otherwise reverse requests fail at the op layer.
-    ///
     /// # Errors
     ///
     /// Returns an error if the JavaScript call fails or its result cannot be
@@ -73,9 +69,7 @@ impl EmbeddedDeno {
         worker::decode_call_response(&response)
     }
 
-    /// Install (or remove) the reverse-RPC service available to subsequent
-    /// `call` invocations.
-    pub fn set_reverse(&mut self, reverse: Option<ReverseRpcService>) {
+    pub(crate) fn set_reverse(&mut self, reverse: Option<ReverseRpcService>) {
         let op_state = self.worker.js_runtime.op_state();
         let mut state = op_state.borrow_mut();
         state.borrow_mut::<EmbeddedHostState>().reverse = reverse;

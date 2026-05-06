@@ -1,10 +1,10 @@
 use anyhow::Result;
 
 use crate::cli::args::{RailgunImportArgs, WalletCommand};
-use crate::railgun::manifest::{WalletManifest, WalletRecord};
+use crate::railgun::manifest::WalletManifest;
 use crate::railgun::{LoadedWallet, RailgunRuntime};
 
-pub async fn run(command: WalletCommand) -> Result<()> {
+pub(crate) async fn run(command: WalletCommand) -> Result<()> {
     match command {
         WalletCommand::Import {
             workdir,
@@ -13,7 +13,7 @@ pub async fn run(command: WalletCommand) -> Result<()> {
         } => {
             let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
             let wallet = import(&mut runtime, &railgun).await?;
-            WalletManifest::upsert_record(&workdir.workdir, record(label, wallet))?;
+            WalletManifest::upsert_record(&workdir.workdir, (label, wallet).into())?;
             Ok(())
         }
         WalletCommand::Create {
@@ -24,16 +24,11 @@ pub async fn run(command: WalletCommand) -> Result<()> {
             let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
             let created = runtime.create_wallet(&railgun.encryption_key).await?;
             println!("mnemonic={}", created.mnemonic);
-            WalletManifest::upsert_record(
-                &workdir.workdir,
-                record(
-                    label,
-                    LoadedWallet {
-                        wallet_id: created.wallet_id,
-                        shielded_address: created.shielded_address,
-                    },
-                ),
-            )?;
+            let loaded = LoadedWallet {
+                wallet_id: created.wallet_id,
+                shielded_address: created.shielded_address,
+            };
+            WalletManifest::upsert_record(&workdir.workdir, (label, loaded).into())?;
             Ok(())
         }
         WalletCommand::List { workdir } => {
@@ -60,12 +55,4 @@ async fn import(runtime: &mut RailgunRuntime, railgun: &RailgunImportArgs) -> Re
         "embedded runtime returned non-Railgun address"
     );
     Ok(wallet)
-}
-
-fn record(label: String, wallet: LoadedWallet) -> WalletRecord {
-    WalletRecord {
-        label,
-        wallet_id: wallet.wallet_id,
-        shielded_address: wallet.shielded_address,
-    }
 }

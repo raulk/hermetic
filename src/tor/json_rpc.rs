@@ -6,10 +6,9 @@ use bytes::Bytes;
 use http::{Request, Uri};
 use http_body_util::{BodyExt, Full};
 use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
 use tower::Service;
 
-use super::connector::ArtiConnector;
+use super::connector::{arti_hyper_client, ArtiConnector};
 use super::ArtiClient;
 
 type HyperBody = Full<Bytes>;
@@ -21,10 +20,11 @@ pub struct ArtiJsonRpcTransport {
 }
 
 impl ArtiJsonRpcTransport {
-    pub fn new(rpc_url: Uri, tor: ArtiClient) -> Self {
-        let connector = ArtiConnector::new(tor);
-        let client = Client::builder(TokioExecutor::new()).build(connector);
-        Self { rpc_url, client }
+    pub fn new(rpc_url: Uri, tor: &ArtiClient) -> Self {
+        Self {
+            rpc_url,
+            client: arti_hyper_client(tor),
+        }
     }
 }
 
