@@ -73,6 +73,17 @@ impl WalletManifest {
             .find(|wallet| wallet.label == selector || wallet.wallet_id == selector)
             .ok_or_else(|| anyhow!("wallet not found in manifest: {selector}"))
     }
+
+    /// Load the manifest, upsert a wallet record, and save back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when load or save fails.
+    pub fn upsert_record(workdir: &Path, record: WalletRecord) -> Result<()> {
+        let mut manifest = Self::load(workdir)?;
+        manifest.upsert(record);
+        manifest.save(workdir)
+    }
 }
 
 /// Validate a user-facing wallet label for use as a clap `value_parser`.

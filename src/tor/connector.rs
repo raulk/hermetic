@@ -3,16 +3,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use alloy_json_rpc::{RequestPacket, ResponsePacket};
-use alloy_transport::{TransportError, TransportErrorKind, TransportFut};
 use anyhow::{anyhow, Context as _};
 use arti_client::IntoTorAddr;
-use bytes::Bytes;
-use http::{Request, Uri};
-use http_body_util::{BodyExt, Full};
+use http::Uri;
 use hyper_util::client::legacy::connect::Connected;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -20,10 +15,9 @@ use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 use tower::Service;
 
-use crate::arti::ArtiClient;
+use super::ArtiClient;
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
-type HyperBody = Full<Bytes>;
 
 #[derive(Clone)]
 pub struct ArtiConnector {
@@ -134,72 +128,5 @@ impl AsyncWrite for ArtiTlsStream {
 
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.get_mut().0).poll_shutdown(cx)
-    }
-}
-
-#[derive(Clone)]
-pub struct ArtiJsonRpcTransport {
-    rpc_url: Uri,
-    client: Client<ArtiConnector, HyperBody>,
-}
-
-impl ArtiJsonRpcTransport {
-    pub fn new(rpc_url: Uri, tor: ArtiClient) -> Self {
-        let connector = ArtiConnector::new(tor);
-        let client = Client::builder(TokioExecutor::new()).build(connector);
-        Self { rpc_url, client }
-    }
-}
-
-impl Service<RequestPacket> for ArtiJsonRpcTransport {
-    type Response = ResponsePacket;
-    type Error = TransportError;
-    type Future = TransportFut<'static>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: RequestPacket) -> Self::Future {
-        let client = self.client.clone();
-        let rpc_url = self.rpc_url.clone();
-
-        Box::pin(async move {
-            let headers = req.headers();
-            let body = req.serialize().map_err(TransportErrorKind::custom)?;
-            let mut request = Request::post(rpc_url);
-            let request_headers = request.headers_mut().ok_or_else(|| {
-                TransportErrorKind::custom_str("RPC request builder has no headers")
-            })?;
-            request_headers.insert(
-                http::header::CONTENT_TYPE,
-                http::HeaderValue::from_static("application/json"),
-            );
-            request_headers.extend(headers);
-            let request = request
-                .body(Full::new(Bytes::copy_from_slice(body.get().as_bytes())))
-                .map_err(TransportErrorKind::custom)?;
-
-            let response = client
-                .request(request)
-                .await
-                .map_err(TransportErrorKind::custom)?;
-            let status = response.status();
-            let bytes = response
-                .into_body()
-                .collect()
-                .await
-                .map_err(TransportErrorKind::custom)?
-                .to_bytes();
-
-            if !status.is_success() {
-                return Err(TransportErrorKind::custom_str(&format!(
-                    "RPC HTTP status {status}: {}",
-                    String::from_utf8_lossy(&bytes)
-                )));
-            }
-
-            serde_json::from_slice::<ResponsePacket>(&bytes).map_err(TransportErrorKind::custom)
-        })
     }
 }

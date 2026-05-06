@@ -1,6 +1,5 @@
 use alloy_network::{Ethereum, NetworkWallet};
-use alloy_provider::{Provider, ProviderBuilder, RootProvider};
-use alloy_rpc_client::RpcClient;
+use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context as _, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -14,11 +13,11 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use crate::arti::ArtiClient;
-use crate::railgun::reverse::{
-    self, ReverseHttpRequest, ReverseHttpResponse, ReverseRequest, ReverseResponse,
-};
-use crate::transport::{ArtiConnector, ArtiJsonRpcTransport};
+use crate::eth::rpc as eth_rpc;
+use crate::railgun::reverse::{ReverseRequest, ReverseResponse};
+use crate::tor::connector::ArtiConnector;
+use crate::tor::services::{self, ReverseHttpRequest, ReverseHttpResponse};
+use crate::tor::ArtiClient;
 
 #[derive(Clone)]
 pub struct TorRpcClient {
@@ -41,18 +40,14 @@ impl TorRpcClient {
 
     #[must_use]
     pub fn provider(&self) -> RootProvider<Ethereum> {
-        let transport = ArtiJsonRpcTransport::new(self.rpc_url.clone(), self.tor.clone());
-        let client = RpcClient::builder().transport(transport, false);
-        RootProvider::new(client)
+        eth_rpc::provider(&self.tor, self.rpc_url.clone())
     }
 
     pub fn wallet_provider(
         &self,
         wallet: impl NetworkWallet<Ethereum> + Clone + 'static,
     ) -> impl Provider<Ethereum> {
-        let transport = ArtiJsonRpcTransport::new(self.rpc_url.clone(), self.tor.clone());
-        let client = RpcClient::builder().transport(transport, false);
-        ProviderBuilder::new().wallet(wallet).connect_client(client)
+        eth_rpc::wallet_provider(&self.tor, self.rpc_url.clone(), wallet)
     }
 
     /// Send one reverse JSON-RPC request through Tor.
@@ -82,7 +77,7 @@ impl TorRpcClient {
         &self,
         request: ReverseHttpRequest,
     ) -> Result<ReverseHttpResponse> {
-        let uri = reverse::service_uri(&request.service, request.path.as_deref())?;
+        let uri = services::service_uri(&request.service, request.path.as_deref())?;
         tracing::info!(
             http_method = %request.method,
             http_service = %request.service,

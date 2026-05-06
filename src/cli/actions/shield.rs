@@ -1,0 +1,48 @@
+use alloy_primitives::U256;
+use anyhow::Result;
+use http::Uri;
+
+use crate::cli::args::{TorArgs, WalletSelectionArgs, WorkdirArgs};
+use crate::eth::signer::{default_signer_address, PublicSignerArgs};
+use crate::eth::tx::{parse_populated_transaction, send_transaction};
+use crate::railgun::RailgunRuntime;
+
+use super::load_selected_wallet;
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run(
+    tor: TorArgs,
+    workdir: WorkdirArgs,
+    rpc: Uri,
+    signer: PublicSignerArgs,
+    wallet: WalletSelectionArgs,
+    amount_wei: U256,
+    dry_run: bool,
+) -> Result<()> {
+    let rpc_client = tor.bootstrap_rpc_client(rpc).await?;
+    let mut runtime = RailgunRuntime::new(&workdir.workdir)
+        .await?
+        .with_rpc_client(rpc_client.clone());
+
+    let public_wallet = signer.wallet().await?;
+    let railgun_wallet = load_selected_wallet(&mut runtime, &workdir.workdir, &wallet).await?;
+    let populated = runtime
+        .populate_shield_base_token(&railgun_wallet.shielded_address, &amount_wei)
+        .await?;
+    let tx = parse_populated_transaction(&populated)?;
+    let from = default_signer_address(&public_wallet);
+
+    println!("wallet_id={}", railgun_wallet.wallet_id);
+    println!("shielded_address={}", railgun_wallet.shielded_address);
+    println!("to={}", tx.to);
+    println!("value={}", tx.value);
+    println!("data_len={}", tx.data.len());
+    println!("from={from}");
+
+    if dry_run {
+        return Ok(());
+    }
+
+    let provider = rpc_client.wallet_provider(public_wallet);
+    send_transaction(provider, from, tx, "shield base-token transaction").await
+}
