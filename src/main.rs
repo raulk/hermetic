@@ -13,6 +13,9 @@ fn init_tracing() {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    // Load .env from the current directory if present. Existing env vars
+    // take precedence over file values; a missing .env is not an error.
+    let _ = dotenvy::dotenv();
     init_tracing();
     // Installing the global crypto provider can legitimately fail after another
     // test or embedding path installed it first.
