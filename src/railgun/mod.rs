@@ -1,114 +1,29 @@
-use std::path::{Path, PathBuf};
+//! Typed Rust facade over the embedded Railgun SDK runtime.
+
+use std::path::Path;
 use std::time::Duration;
 
 use alloy_primitives::U256;
 use anyhow::{anyhow, Context as _, Result};
 use deno_runtime::deno_core::resolve_url;
-use deno_runtime::deno_permissions::PermissionsOptions;
-use serde::Deserialize;
+use deno_runtime::deno_permissions::{PermissionsContainer, PermissionsOptions};
 
 use crate::embedded::{permissions_from_options, EmbeddedDeno, EmbeddedHostState};
 use crate::rpc::TorRpcClient;
 
+pub mod artifacts;
 pub mod manifest;
 pub mod reverse;
+pub mod types;
+
+pub use artifacts::Artifact;
+pub use types::{
+    CreatedWallet, Health, LoadedWallet, PermissionsReport, PopulatedTransaction, RefreshedBalance,
+};
 
 pub struct RailgunRuntime {
     inner: EmbeddedDeno,
     rpc_client: Option<TorRpcClient>,
-}
-
-#[derive(Debug)]
-pub struct Artifact {
-    workdir: PathBuf,
-    root: PathBuf,
-}
-
-impl Artifact {
-    #[must_use]
-    pub fn new(workdir: &Path) -> Self {
-        Self {
-            workdir: workdir.to_path_buf(),
-            root: workdir.join("artifacts"),
-        }
-    }
-
-    #[must_use]
-    pub fn workdir(&self) -> &Path {
-        &self.workdir
-    }
-
-    /// Read a Railgun artifact as raw bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the artifact exists but cannot be read.
-    pub fn read(&self, relative_path: &str) -> Result<Vec<u8>> {
-        std::fs::read(self.root.join(relative_path)).map_err(Into::into)
-    }
-
-    /// Write a Railgun artifact under the artifact root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the destination directory cannot be created or the
-    /// artifact cannot be written.
-    pub fn write(&self, dir: &str, relative_path: &str, bytes: &[u8]) -> Result<()> {
-        std::fs::create_dir_all(self.root.join(dir))?;
-        std::fs::write(self.root.join(relative_path), bytes)?;
-        Ok(())
-    }
-
-    #[must_use]
-    pub fn exists(&self, relative_path: &str) -> bool {
-        self.root.join(relative_path).exists()
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Health {
-    pub sdk_version: String,
-    pub shared_models_version: String,
-    pub node_compat: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[allow(clippy::struct_excessive_bools)]
-pub struct Permissions {
-    pub fetch_denied: bool,
-    pub connect_denied: bool,
-    pub node_net_denied: bool,
-    pub write_denied: bool,
-    pub env_denied: bool,
-    pub read_allowed: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LoadedWallet {
-    pub wallet_id: String,
-    pub shielded_address: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreatedWallet {
-    pub wallet_id: String,
-    pub shielded_address: String,
-    pub mnemonic: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PopulatedTransaction {
-    pub to: String,
-    pub data: String,
-    pub value: String,
-    pub gas_limit: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RefreshedBalance {
-    pub token_address: String,
-    pub balance: String,
-    pub spendable_balance: String,
 }
 
 impl RailgunRuntime {
@@ -152,7 +67,7 @@ impl RailgunRuntime {
     /// # Errors
     ///
     /// Returns an error when the embedded runtime call fails.
-    pub async fn check_perms(&mut self, node_net_port: u16) -> Result<Permissions> {
+    pub async fn check_perms(&mut self, node_net_port: u16) -> Result<PermissionsReport> {
         self.inner
             .call(
                 "runtime-permissions-smoke",
@@ -297,9 +212,7 @@ impl RailgunRuntime {
     }
 }
 
-fn railgun_permissions(
-    workdir: &Path,
-) -> Result<deno_runtime::deno_permissions::PermissionsContainer> {
+fn railgun_permissions(workdir: &Path) -> Result<PermissionsContainer> {
     let artifacts = workdir.join("artifacts").to_string_lossy().to_string();
     let embedded = workdir.join("embedded").to_string_lossy().to_string();
     let wasm_packages = workdir
