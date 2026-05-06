@@ -9,7 +9,6 @@ use deno_runtime::deno_core::resolve_url;
 use deno_runtime::deno_permissions::{PermissionsContainer, PermissionsOptions};
 
 use crate::embedded::{permissions_from_options, EmbeddedDeno, EmbeddedHostState};
-use crate::rpc::TorRpcClient;
 
 pub mod artifacts;
 pub mod manifest;
@@ -17,13 +16,14 @@ pub mod reverse;
 pub mod types;
 
 pub use artifacts::Artifact;
+pub use reverse::ReverseRpcService;
 pub use types::{
     CreatedWallet, Health, LoadedWallet, PermissionsReport, PopulatedTransaction, RefreshedBalance,
 };
 
 pub struct RailgunRuntime {
     inner: EmbeddedDeno,
-    rpc_client: Option<TorRpcClient>,
+    reverse: Option<ReverseRpcService>,
 }
 
 impl RailgunRuntime {
@@ -42,14 +42,14 @@ impl RailgunRuntime {
         let host_state = EmbeddedHostState::new(Artifact::new(&workdir));
         Ok(Self {
             inner: EmbeddedDeno::load_esm(&main_module, bundle, permissions, host_state).await?,
-            rpc_client: None,
+            reverse: None,
         })
     }
 
-    /// Attach reverse-RPC state used by SDK calls that need network data.
+    /// Attach the reverse-RPC service used by SDK calls that need network data.
     #[must_use]
-    pub fn with_rpc_client(mut self, rpc_client: TorRpcClient) -> Self {
-        self.rpc_client = Some(rpc_client);
+    pub fn with_reverse(mut self, reverse: ReverseRpcService) -> Self {
+        self.reverse = Some(reverse);
         self
     }
 
@@ -145,15 +145,15 @@ impl RailgunRuntime {
         railgun_address: &str,
         amount_wei: &U256,
     ) -> Result<PopulatedTransaction> {
-        let rpc_client = self.rpc_client()?;
+        let reverse = self.reverse()?;
         self.inner
-            .call_with_reverse_rpc(
+            .call_with_reverse(
                 "populate_shield_base_token",
                 serde_json::json!({
                     "railgun_address": railgun_address,
                     "amount_wei": amount_wei.to_string(),
                 }),
-                rpc_client.clone(),
+                reverse.clone(),
             )
             .await
     }
@@ -164,13 +164,13 @@ impl RailgunRuntime {
     ///
     /// Returns an error when quick-sync, RPC, or balance decryption fails.
     pub async fn refresh_balance(&mut self, wallet_id: &str) -> Result<RefreshedBalance> {
-        let rpc_client = self.rpc_client()?;
+        let reverse = self.reverse()?;
         tokio::time::timeout(
             Duration::from_mins(3),
-            self.inner.call_with_reverse_rpc(
+            self.inner.call_with_reverse(
                 "refresh_balance",
                 serde_json::json!({ "wallet_id": wallet_id }),
-                rpc_client.clone(),
+                reverse.clone(),
             ),
         )
         .await?
@@ -188,10 +188,10 @@ impl RailgunRuntime {
         encryption_key: &str,
         amount_wei: &U256,
     ) -> Result<PopulatedTransaction> {
-        let rpc_client = self.rpc_client()?;
+        let reverse = self.reverse()?;
         tokio::time::timeout(
             Duration::from_mins(15),
-            self.inner.call_with_reverse_rpc(
+            self.inner.call_with_reverse(
                 "prepare_unshield_base_token",
                 serde_json::json!({
                     "wallet_id": wallet_id,
@@ -199,16 +199,16 @@ impl RailgunRuntime {
                     "encryption_key": encryption_key,
                     "amount_wei": amount_wei.to_string(),
                 }),
-                rpc_client.clone(),
+                reverse.clone(),
             ),
         )
         .await?
     }
 
-    fn rpc_client(&self) -> Result<&TorRpcClient> {
-        self.rpc_client
+    fn reverse(&self) -> Result<&ReverseRpcService> {
+        self.reverse
             .as_ref()
-            .ok_or_else(|| anyhow!("Railgun runtime was created without a Tor RPC client"))
+            .ok_or_else(|| anyhow!("Railgun runtime was created without a reverse-RPC service"))
     }
 }
 

@@ -3,8 +3,10 @@ use anyhow::Result;
 use http::Uri;
 
 use crate::cli::args::{TorArgs, WalletSelectionArgs, WorkdirArgs};
+use crate::eth::rpc as eth_rpc;
 use crate::eth::signer::{default_signer_address, PublicSignerArgs};
 use crate::eth::tx::{parse_populated_transaction, send_transaction};
+use crate::railgun::reverse::ReverseRpcService;
 use crate::railgun::RailgunRuntime;
 
 use super::load_selected_wallet;
@@ -20,10 +22,11 @@ pub async fn run(
     recipient: Option<String>,
     dry_run: bool,
 ) -> Result<()> {
-    let rpc_client = tor.bootstrap_rpc_client(rpc).await?;
+    let arti = tor.bootstrap_arti().await?;
+    let reverse = ReverseRpcService::new(arti.clone(), rpc.clone());
     let mut runtime = RailgunRuntime::new(&workdir.workdir)
         .await?
-        .with_rpc_client(rpc_client.clone());
+        .with_reverse(reverse);
 
     let public_wallet = signer.wallet().await?;
     let from = default_signer_address(&public_wallet);
@@ -52,6 +55,6 @@ pub async fn run(
         return Ok(());
     }
 
-    let provider = rpc_client.wallet_provider(public_wallet);
+    let provider = eth_rpc::wallet_provider(&arti, rpc, public_wallet);
     send_transaction(provider, from, tx, "unshield base-token transaction").await
 }

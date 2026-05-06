@@ -2,6 +2,7 @@ use anyhow::Result;
 use http::Uri;
 
 use crate::cli::args::{TorArgs, WalletSelectionArgs, WorkdirArgs};
+use crate::railgun::reverse::ReverseRpcService;
 use crate::railgun::RailgunRuntime;
 
 use super::load_selected_wallet;
@@ -12,10 +13,11 @@ pub async fn run(
     rpc: Uri,
     wallet: WalletSelectionArgs,
 ) -> Result<()> {
-    let rpc_client = tor.bootstrap_rpc_client(rpc).await?;
+    let arti = tor.bootstrap_arti().await?;
+    let reverse = ReverseRpcService::new(arti, rpc);
     let mut runtime = RailgunRuntime::new(&workdir.workdir)
         .await?
-        .with_rpc_client(rpc_client);
+        .with_reverse(reverse);
 
     let railgun_wallet = load_selected_wallet(&mut runtime, &workdir.workdir, &wallet).await?;
     let refreshed = runtime.refresh_balance(&railgun_wallet.wallet_id).await?;

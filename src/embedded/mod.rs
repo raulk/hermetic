@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::rpc::TorRpcClient;
+use crate::railgun::reverse::ReverseRpcService;
 
 pub use ops::EmbeddedHostState;
 pub use worker::permissions_from_options;
@@ -74,32 +74,32 @@ impl EmbeddedDeno {
     ///
     /// Returns an error if JavaScript execution fails, reverse RPC fails, or the
     /// final result cannot be deserialized into `Res`.
-    pub async fn call_with_reverse_rpc<Req, Res>(
+    pub async fn call_with_reverse<Req, Res>(
         &mut self,
         method: &str,
         params: Req,
-        rpc_client: TorRpcClient,
+        reverse: ReverseRpcService,
     ) -> Result<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
     {
-        self.call_inner(method, params, Some(rpc_client)).await
+        self.call_inner(method, params, Some(reverse)).await
     }
 
     async fn call_inner<Req, Res>(
         &mut self,
         method: &str,
         params: Req,
-        rpc_client: Option<TorRpcClient>,
+        reverse: Option<ReverseRpcService>,
     ) -> Result<Res>
     where
         Req: Serialize,
         Res: DeserializeOwned,
     {
-        self.set_rpc_client(rpc_client);
+        self.set_reverse(reverse);
         let call_result = self.call_runtime(method, params).await;
-        self.set_rpc_client(None);
+        self.set_reverse(None);
         worker::decode_call_response(&call_result?)
     }
 
@@ -137,9 +137,9 @@ impl EmbeddedDeno {
         ])
     }
 
-    fn set_rpc_client(&mut self, rpc_client: Option<TorRpcClient>) {
+    fn set_reverse(&mut self, reverse: Option<ReverseRpcService>) {
         let op_state = self.worker.js_runtime.op_state();
         let mut state = op_state.borrow_mut();
-        state.borrow_mut::<EmbeddedHostState>().rpc_client = rpc_client;
+        state.borrow_mut::<EmbeddedHostState>().reverse = reverse;
     }
 }

@@ -6,5 +6,4 @@ pub mod cli;
 pub(crate) mod embedded;
 pub(crate) mod eth;
 pub(crate) mod railgun;
-pub(crate) mod rpc;
 pub(crate) mod tor;

@@ -6,14 +6,13 @@ use std::rc::Rc;
 use deno_error::JsErrorBox;
 use deno_runtime::deno_core::{extension, op2, JsBuffer, OpState, ToJsBuffer};
 
-use crate::railgun::reverse::{ReverseRequest, ReverseResponse};
+use crate::railgun::reverse::{ReverseRequest, ReverseResponse, ReverseRpcService};
 use crate::railgun::Artifact;
-use crate::rpc::TorRpcClient;
 use crate::tor::services;
 
 pub struct EmbeddedHostState {
     artifact: Artifact,
-    pub(super) rpc_client: Option<TorRpcClient>,
+    pub(super) reverse: Option<ReverseRpcService>,
 }
 
 impl EmbeddedHostState {
@@ -21,7 +20,7 @@ impl EmbeddedHostState {
     pub fn new(artifact: Artifact) -> Self {
         Self {
             artifact,
-            rpc_client: None,
+            reverse: None,
         }
     }
 }
@@ -101,16 +100,18 @@ async fn op_hermetic_reverse_request(
     state: Rc<RefCell<OpState>>,
     #[serde] request: ReverseRequest,
 ) -> Result<ReverseResponse, JsErrorBox> {
-    let rpc_client = {
+    let reverse = {
         let state = state.borrow();
         state
             .borrow::<EmbeddedHostState>()
-            .rpc_client
+            .reverse
             .clone()
-            .ok_or_else(|| JsErrorBox::generic("reverse request attempted without RPC client"))?
+            .ok_or_else(|| {
+                JsErrorBox::generic("reverse request attempted without reverse-RPC service")
+            })?
     };
-    rpc_client
-        .handle_reverse_request(request)
+    reverse
+        .handle(request)
         .await
         .map_err(|err| JsErrorBox::generic(format!("{err:#}")))
 }
