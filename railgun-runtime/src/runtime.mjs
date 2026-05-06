@@ -2,11 +2,25 @@
 // dispatch surface and the wallet-level helpers; delegates storage,
 // network, snark, and permission concerns to its siblings.
 
+import process from "node:process";
+
 import * as wallet from "@railgun-community/wallet";
 import * as sharedModels from "@railgun-community/shared-models";
 import { Wallet as EthersWallet } from "ethers";
 
 import packageJson from "../package.json";
+
+// Shadow process.env with an empty object before any SDK code runs.
+// The Railgun SDK's bundled logger reads `process.env.DEBUG` during
+// graphql-mesh init; Deno would deny that read (DEBUG is not in the env
+// allowlist) and the SDK does not catch the resulting NotCapable error.
+// Returning undefined silently is the intended behavior here.
+Object.defineProperty(process, "env", {
+  value: {},
+  configurable: true,
+  enumerable: true,
+  writable: true,
+});
 
 import { randomHexPrivateKey } from "./artifacts.mjs";
 import { op_hermetic_progress } from "./host-ops.mjs";
