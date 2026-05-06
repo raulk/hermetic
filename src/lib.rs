@@ -2,8 +2,9 @@
 //! keeping public-chain RPC and SDK reverse requests on Rust-owned Tor egress.
 
 pub mod cli;
-pub mod embedded;
-pub mod eth;
-pub mod railgun;
-pub mod rpc;
-pub mod tor;
+
+pub(crate) mod embedded;
+pub(crate) mod eth;
+pub(crate) mod railgun;
+pub(crate) mod rpc;
+pub(crate) mod tor;
