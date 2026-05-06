@@ -1,29 +1,31 @@
-import * as esbuild from 'esbuild';
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import * as esbuild from "esbuild";
+import fs from "node:fs/promises";
+import path from "node:path";
 
-const root = path.resolve(import.meta.dirname, '..');
-const runtimeEntry = path.join(import.meta.dirname, 'runtime.mjs');
-const embeddedDir = path.join(root, 'embedded');
+const root = path.resolve(import.meta.dirname, "..");
+const runtimeEntry = path.join(import.meta.dirname, "src/runtime.mjs");
+const embeddedDir = path.join(root, "embedded");
 
-const outfile = path.join(embeddedDir, 'railgun_runtime.bundle.mjs');
+const outfile = path.join(embeddedDir, "railgun_runtime.bundle.mjs");
 
 async function patchNativeAddons(outfile) {
-  let source = await fs.readFile(outfile, 'utf8');
-  for (const module of [
-    'buffer',
-    'constants',
-    'crypto',
-    'events',
-    'fs',
-    'http',
-    'https',
-    'os',
-    'stream',
-    'url',
-    'util',
-    'zlib',
-  ]) {
+  let source = await fs.readFile(outfile, "utf8");
+  for (
+    const module of [
+      "buffer",
+      "constants",
+      "crypto",
+      "events",
+      "fs",
+      "http",
+      "https",
+      "os",
+      "stream",
+      "url",
+      "util",
+      "zlib",
+    ]
+  ) {
     source = source.replaceAll(` from "${module}"`, ` from "node:${module}"`);
   }
   source = source.replace(
@@ -37,12 +39,12 @@ await fs.mkdir(embeddedDir, { recursive: true });
 await esbuild.build({
   entryPoints: [runtimeEntry],
   bundle: true,
-  platform: 'node',
-  format: 'esm',
+  platform: "node",
+  format: "esm",
   outfile,
   external: [
-    '@railgun-community/poseidon-hash-wasm',
-    '@railgun-community/curve25519-scalarmult-wasm',
+    "@railgun-community/poseidon-hash-wasm",
+    "@railgun-community/curve25519-scalarmult-wasm",
   ],
 });
 await patchNativeAddons(outfile);

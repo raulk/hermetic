@@ -3,12 +3,12 @@ default:
 
 fmt:
     cargo fmt
-    deno fmt railgun-runtime/runtime.mjs src/hermetic_host_ops.js
+    deno fmt railgun-runtime/src/ railgun-runtime/build-embedded.mjs src/embedded/bootstrap.js
 
 check:
     cargo fmt --check
-    deno fmt --check railgun-runtime/runtime.mjs src/hermetic_host_ops.js
-    deno lint railgun-runtime/runtime.mjs src/hermetic_host_ops.js
+    deno fmt --check railgun-runtime/src/ railgun-runtime/build-embedded.mjs src/embedded/bootstrap.js
+    deno lint railgun-runtime/src/ railgun-runtime/build-embedded.mjs src/embedded/bootstrap.js
     cargo clippy --all-targets -- -D warnings -W clippy::pedantic
     just static
     cargo check
