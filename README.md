@@ -17,9 +17,9 @@ Rust CLI
 ```
 
 The embedded worker loads `embedded/railgun_runtime.bundle.mjs`, generated from
-`railgun-runtime/runtime.mjs`. JavaScript cannot open sockets or use ambient
-network fetch. When the Railgun SDK needs JSON-RPC, quick-sync GraphQL, or PPOI
-HTTP, it emits a reverse request to Rust; Rust maps the request to an
+the modules under `railgun-runtime/src/`. JavaScript cannot open sockets or use
+ambient network fetch. When the Railgun SDK needs JSON-RPC, quick-sync GraphQL,
+or PPOI HTTP, it emits a reverse request to Rust; Rust maps the request to an
 allowlisted service and performs it through Tor.
 
 Railgun quick-sync uses
@@ -142,19 +142,27 @@ cargo run -- unshield \
 
 ## Repository Map
 
-- `src/main.rs`: process setup and CLI dispatch.
-- `src/cli.rs`: clap command and argument definitions.
-- `src/commands.rs`: command handlers.
-- `src/railgun/`: typed Railgun runtime API and SDK wallet manifest.
-- `src/embedded.rs`: embedded Deno worker and reverse-RPC pump.
-- `src/transport.rs`: Tor-backed hyper connector.
-- `src/rpc.rs`: Alloy provider construction over Arti.
-- `src/signer.rs`: Alloy local-key and Ledger signer construction.
-- `railgun-runtime/runtime.mjs`: shared Railgun SDK runtime logic.
-- `railgun-runtime/build-embedded.mjs`: bundle generation for embedded Deno.
+- `src/main.rs`, `src/lib.rs`: binary entry and crate surface.
+- `src/cli/`: clap argument structs (`args.rs`), dispatcher (`run.rs`),
+  and per-command bodies (`actions/`).
+- `src/tor/`: Arti bootstrap, hyper connector, JSON-RPC transport, and
+  the reverse-HTTP service allowlist. Every outbound TCP stream the
+  process opens originates here.
+- `src/eth/`: Alloy provider construction, public-signer args,
+  transaction parsing/broadcast, and Sepolia network defaults.
+- `src/railgun/`: typed Railgun runtime facade (`mod.rs`, typestate),
+  wallet manifest, file-backed artifact store, and the Tor-backed
+  reverse-RPC servicer.
+- `src/embedded/`: embedded Deno worker, host op surface, Node compat
+  plumbing, and the JS bootstrap shim.
+- `railgun-runtime/src/`: bundled Railgun SDK runtime, split into
+  `runtime.mjs` (entry/dispatch), `network.mjs`, `storage.mjs`,
+  `snark.mjs`, `permissions.mjs`, `artifacts.mjs`, `host-ops.mjs`.
+- `railgun-runtime/build-embedded.mjs`: bundle generation for embedded
+  Deno.
 - `spec.md`: fuller design notes and historical plan.
 - `AGENTS.md`: implementation guidance and verification notes.
-- `wayfinding/`: exploratory artifacts retained for design history.
+- `docs/wayfinding/`: exploratory artifacts retained for design history.
 
 ## Notes
 

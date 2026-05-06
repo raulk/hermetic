@@ -1,3 +1,6 @@
+# Tor egress invariant (paired with clippy.toml).
+# deny.toml bans transport crates that would pull in non-Arti TCP egress;
+# clippy.toml catches direct calls to TCP/DNS APIs at the AST level.
 [bans]
 multiple-versions = "allow"
 deny = [

@@ -1,3 +1,7 @@
+# Tor egress invariant (paired with deny.toml).
+# disallowed-methods catches direct calls to TCP/DNS APIs at the Rust AST
+# level; deny.toml [bans] catches transitive transport crates. Both layers
+# enforce the same rule from different angles.
 disallowed-methods = [
   { path = "tokio::net::TcpStream::connect", reason = "all TCP egress must go through Arti" },
   { path = "std::net::TcpStream::connect", reason = "all TCP egress must go through Arti" },

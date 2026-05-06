@@ -6,8 +6,8 @@
   JavaScript must not own network egress. The embedded worker should keep
   Deno network permissions denied and ask Rust to service JSON-RPC/HTTP
   through Tor.
-- Treat `railgun-runtime/runtime.mjs` as the shared Railgun runtime surface.
-  `src/embedded.rs` is the embedded Deno adapter.
+- Treat `railgun-runtime/src/` as the shared Railgun runtime surface
+  (entry at `runtime.mjs`). `src/embedded/` is the embedded Deno adapter.
 - Arti is a Rust crate integration point, not a ready-made JS FFI binding.
   Node, Deno, or Bun could call a custom C/N-API shim, but that would be a
   new native binding surface maintained here. Prefer Rust-owned Tor via Arti plus
@@ -46,9 +46,9 @@
 
 ## Wayfinding
 
-- `wayfinding/deno-embedding/` contains exploratory Deno embedding proofs.
-  They are retained for design history only and should not be part of the
-  normal build or verification path.
-- `wayfinding/tor-transport-spike/` contains the old Tor transport spike. It is
-  useful design history, but the CLI now owns the supported Tor verification
-  path.
+- `docs/wayfinding/deno-embedding/` contains exploratory Deno embedding
+  proofs. They are retained for design history only and should not be
+  part of the normal build or verification path.
+- `docs/wayfinding/tor-transport-spike/` contains the old Tor transport
+  spike. It is useful design history, but the CLI now owns the supported
+  Tor verification path.
