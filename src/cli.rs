@@ -96,7 +96,7 @@ pub enum WalletCommand {
     Import {
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
-        #[arg(long)]
+        #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
         railgun: RailgunImportArgs,
@@ -105,7 +105,7 @@ pub enum WalletCommand {
     Create {
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
-        #[arg(long)]
+        #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
         railgun: RailgunKeyArgs,

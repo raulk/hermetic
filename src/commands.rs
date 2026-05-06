@@ -5,7 +5,7 @@ use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context as _, Result};
 
 use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelectionArgs};
-use crate::railgun::manifest::{validate_label, WalletManifest, WalletRecord};
+use crate::railgun::manifest::{WalletManifest, WalletRecord};
 use crate::railgun::{PopulatedTransaction, RailgunRuntime};
 use crate::signer::default_signer_address;
 use crate::{arti, rpc};
@@ -243,7 +243,6 @@ async fn wallet_command(command: WalletCommand) -> Result<()> {
             label,
             railgun,
         } => {
-            validate_label(&label)?;
             let mut runtime = RailgunRuntime::new(&workdir).await?;
             let wallet = runtime.create_wallet(&railgun.encryption_key).await?;
             println!("mnemonic={}", wallet.mnemonic);
@@ -303,7 +302,6 @@ fn upsert_wallet_record(
     label: &str,
     wallet: crate::railgun::LoadedWallet,
 ) -> Result<()> {
-    validate_label(label)?;
     let mut manifest = WalletManifest::load(workdir)?;
     manifest.upsert(WalletRecord {
         label: label.to_owned(),
