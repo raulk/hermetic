@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
 use alloy_primitives::U256;
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use http::Uri;
 
 use crate::eth::network::DEFAULT_RPC;
 use crate::eth::signer::PublicSignerArgs;
+use crate::rpc::TorRpcClient;
+use crate::tor;
 
 #[derive(Debug, Parser)]
 #[command(name = "hermetic")]
@@ -121,6 +124,27 @@ pub struct TorArgs {
     pub tor_state: PathBuf,
     #[arg(long, default_value = "./.arti/cache")]
     pub tor_cache: PathBuf,
+}
+
+impl TorArgs {
+    /// Bootstrap an isolated Arti client for one command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Tor bootstrap fails.
+    pub async fn bootstrap_arti(&self) -> Result<tor::ArtiClient> {
+        let client = tor::bootstrap(&self.tor_state, &self.tor_cache).await?;
+        Ok(client.isolated_client())
+    }
+
+    /// Bootstrap a Tor-backed RPC client for one command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if Tor bootstrap fails.
+    pub async fn bootstrap_rpc_client(&self, rpc_url: Uri) -> Result<TorRpcClient> {
+        Ok(TorRpcClient::new(self.bootstrap_arti().await?, rpc_url))
+    }
 }
 
 #[derive(Clone, Debug, clap::Args)]
