@@ -1,10 +1,13 @@
-//! Typed Rust facade over the embedded Railgun SDK runtime.
+//! Typed Rust facade over the embedded Railgun SDK runtime. Modeled as a
+//! typestate so the compiler enforces the rule "methods needing reverse
+//! RPC require a connected runtime."
 
+use std::marker::PhantomData;
 use std::path::Path;
 use std::time::Duration;
 
 use alloy_primitives::U256;
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{Context as _, Result};
 use deno_runtime::deno_core::resolve_url;
 use deno_runtime::deno_permissions::{PermissionsContainer, PermissionsOptions};
 
@@ -21,38 +24,24 @@ pub use types::{
     CreatedWallet, Health, LoadedWallet, PermissionsReport, PopulatedTransaction, RefreshedBalance,
 };
 
-pub struct RailgunRuntime {
+/// Marker: runtime constructed but no reverse-RPC service attached. Wallet
+/// IO, health, and permission probes are available; methods that need
+/// network data are not.
+pub struct Disconnected;
+
+/// Marker: runtime has a reverse-RPC service attached and may make calls
+/// that route SDK-emitted JSON-RPC and HTTP through Tor.
+pub struct Connected;
+
+pub struct Runtime<S> {
     inner: EmbeddedDeno,
-    reverse: Option<ReverseRpcService>,
+    _state: PhantomData<S>,
 }
 
-impl RailgunRuntime {
-    /// Create a typed Railgun runtime facade.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the embedded Deno runtime cannot be initialized.
-    pub async fn new(workdir: &Path) -> Result<Self> {
-        let workdir = std::fs::canonicalize(workdir).context("resolving Railgun workdir")?;
-        let bundle_path = workdir.join("embedded/railgun_runtime.bundle.mjs");
-        let bundle = std::fs::read_to_string(&bundle_path)
-            .with_context(|| format!("reading {}", bundle_path.display()))?;
-        let main_module = resolve_url("file:///hermetic-embedded-railgun.mjs")?;
-        let permissions = railgun_permissions(&workdir)?;
-        let host_state = EmbeddedHostState::new(Artifact::new(&workdir));
-        Ok(Self {
-            inner: EmbeddedDeno::load_esm(&main_module, bundle, permissions, host_state).await?,
-            reverse: None,
-        })
-    }
+pub type RailgunRuntime = Runtime<Disconnected>;
+pub type ConnectedRuntime = Runtime<Connected>;
 
-    /// Attach the reverse-RPC service used by SDK calls that need network data.
-    #[must_use]
-    pub fn with_reverse(mut self, reverse: ReverseRpcService) -> Self {
-        self.reverse = Some(reverse);
-        self
-    }
-
+impl<S> Runtime<S> {
     /// Return SDK version and import health information.
     ///
     /// # Errors
@@ -134,7 +123,43 @@ impl RailgunRuntime {
             )
             .await
     }
+}
 
+impl Runtime<Disconnected> {
+    /// Create a typed Railgun runtime facade.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the embedded Deno runtime cannot be initialized.
+    pub async fn new(workdir: &Path) -> Result<Self> {
+        let workdir = std::fs::canonicalize(workdir).context("resolving Railgun workdir")?;
+        let bundle_path = workdir.join("embedded/railgun_runtime.bundle.mjs");
+        let bundle = std::fs::read_to_string(&bundle_path)
+            .with_context(|| format!("reading {}", bundle_path.display()))?;
+        let main_module = resolve_url("file:///hermetic-embedded-railgun.mjs")?;
+        let permissions = railgun_permissions(&workdir)?;
+        let host_state = EmbeddedHostState::new(Artifact::new(&workdir));
+        Ok(Self {
+            inner: EmbeddedDeno::load_esm(&main_module, bundle, permissions, host_state).await?,
+            _state: PhantomData,
+        })
+    }
+
+    /// Attach a reverse-RPC service for the duration of the runtime.
+    ///
+    /// The Connected runtime can issue SDK calls that route JSON-RPC and
+    /// reverse HTTP through the supplied service.
+    #[must_use]
+    pub fn connect(mut self, reverse: ReverseRpcService) -> ConnectedRuntime {
+        self.inner.set_reverse(Some(reverse));
+        Runtime {
+            inner: self.inner,
+            _state: PhantomData,
+        }
+    }
+}
+
+impl Runtime<Connected> {
     /// Populate a base-token shield transaction.
     ///
     /// # Errors
@@ -145,15 +170,13 @@ impl RailgunRuntime {
         railgun_address: &str,
         amount_wei: &U256,
     ) -> Result<PopulatedTransaction> {
-        let reverse = self.reverse()?;
         self.inner
-            .call_with_reverse(
+            .call(
                 "populate_shield_base_token",
                 serde_json::json!({
                     "railgun_address": railgun_address,
                     "amount_wei": amount_wei.to_string(),
                 }),
-                reverse.clone(),
             )
             .await
     }
@@ -164,13 +187,11 @@ impl RailgunRuntime {
     ///
     /// Returns an error when quick-sync, RPC, or balance decryption fails.
     pub async fn refresh_balance(&mut self, wallet_id: &str) -> Result<RefreshedBalance> {
-        let reverse = self.reverse()?;
         tokio::time::timeout(
             Duration::from_mins(3),
-            self.inner.call_with_reverse(
+            self.inner.call(
                 "refresh_balance",
                 serde_json::json!({ "wallet_id": wallet_id }),
-                reverse.clone(),
             ),
         )
         .await?
@@ -188,10 +209,9 @@ impl RailgunRuntime {
         encryption_key: &str,
         amount_wei: &U256,
     ) -> Result<PopulatedTransaction> {
-        let reverse = self.reverse()?;
         tokio::time::timeout(
             Duration::from_mins(15),
-            self.inner.call_with_reverse(
+            self.inner.call(
                 "prepare_unshield_base_token",
                 serde_json::json!({
                     "wallet_id": wallet_id,
@@ -199,16 +219,9 @@ impl RailgunRuntime {
                     "encryption_key": encryption_key,
                     "amount_wei": amount_wei.to_string(),
                 }),
-                reverse.clone(),
             ),
         )
         .await?
-    }
-
-    fn reverse(&self) -> Result<&ReverseRpcService> {
-        self.reverse
-            .as_ref()
-            .ok_or_else(|| anyhow!("Railgun runtime was created without a reverse-RPC service"))
     }
 }
 

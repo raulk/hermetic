@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::cli::args::WalletSelectionArgs;
 use crate::railgun::manifest::WalletManifest;
-use crate::railgun::{LoadedWallet, RailgunRuntime};
+use crate::railgun::{LoadedWallet, Runtime};
 
 pub mod balance;
 pub mod doctor;
@@ -17,8 +17,11 @@ pub mod unshield;
 pub mod wallet;
 
 /// Look up a wallet by label or `wallet_id` and load it into the runtime.
-async fn load_selected_wallet(
-    runtime: &mut RailgunRuntime,
+/// Generic over the typestate so the helper works for both
+/// `RailgunRuntime` (wallet command) and `ConnectedRuntime` (shield,
+/// balance, unshield).
+async fn load_selected_wallet<S>(
+    runtime: &mut Runtime<S>,
     workdir: &Path,
     selection: &WalletSelectionArgs,
 ) -> Result<LoadedWallet> {
