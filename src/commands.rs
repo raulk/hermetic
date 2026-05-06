@@ -5,7 +5,7 @@ use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context as _, Result};
 
 use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelectionArgs};
-use crate::railgun::manifest::{validate_label, WalletManifest, WalletRecord};
+use crate::railgun::manifest::{WalletManifest, WalletRecord};
 use crate::railgun::{PopulatedTransaction, RailgunRuntime};
 use crate::signer::default_signer_address;
 use crate::{arti, rpc};
@@ -20,7 +20,7 @@ pub async fn run(command: Command) -> Result<()> {
     match command {
         Command::Ping { tor, rpc } => ping(tor, rpc).await,
         Command::Doctor { workdir } => {
-            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
             doctor(&mut runtime).await
         }
         Command::Wallet { command } => wallet_command(command).await,
@@ -39,12 +39,12 @@ pub async fn run(command: Command) -> Result<()> {
             dry_run,
         } => {
             let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
-            let mut runtime = RailgunRuntime::new(&workdir)
+            let mut runtime = RailgunRuntime::new(&workdir.workdir)
                 .await?
                 .with_rpc_client(rpc_client.clone());
             shield(
                 &mut runtime,
-                &workdir,
+                &workdir.workdir,
                 rpc_client,
                 signer,
                 &wallet,
@@ -60,10 +60,10 @@ pub async fn run(command: Command) -> Result<()> {
             wallet,
         } => {
             let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
-            let mut runtime = RailgunRuntime::new(&workdir)
+            let mut runtime = RailgunRuntime::new(&workdir.workdir)
                 .await?
                 .with_rpc_client(rpc_client);
-            balance(&mut runtime, &workdir, &wallet).await
+            balance(&mut runtime, &workdir.workdir, &wallet).await
         }
         Command::Unshield {
             tor,
@@ -76,11 +76,11 @@ pub async fn run(command: Command) -> Result<()> {
             dry_run,
         } => {
             let rpc_client = bootstrap_rpc_client(tor, rpc).await?;
-            let mut runtime = RailgunRuntime::new(&workdir)
+            let mut runtime = RailgunRuntime::new(&workdir.workdir)
                 .await?
                 .with_rpc_client(rpc_client.clone());
             let input = UnshieldInput {
-                workdir,
+                workdir: workdir.workdir,
                 rpc_client,
                 signer,
                 wallet,
@@ -233,9 +233,9 @@ async fn wallet_command(command: WalletCommand) -> Result<()> {
             label,
             railgun,
         } => {
-            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
             let wallet = load_wallet(&mut runtime, &railgun).await?;
-            upsert_wallet_record(&workdir, &label, wallet)?;
+            upsert_wallet_record(&workdir.workdir, &label, wallet)?;
             Ok(())
         }
         WalletCommand::Create {
@@ -243,12 +243,11 @@ async fn wallet_command(command: WalletCommand) -> Result<()> {
             label,
             railgun,
         } => {
-            validate_label(&label)?;
-            let mut runtime = RailgunRuntime::new(&workdir).await?;
+            let mut runtime = RailgunRuntime::new(&workdir.workdir).await?;
             let wallet = runtime.create_wallet(&railgun.encryption_key).await?;
             println!("mnemonic={}", wallet.mnemonic);
             upsert_wallet_record(
-                &workdir,
+                &workdir.workdir,
                 &label,
                 crate::railgun::LoadedWallet {
                     wallet_id: wallet.wallet_id,
@@ -258,7 +257,7 @@ async fn wallet_command(command: WalletCommand) -> Result<()> {
             Ok(())
         }
         WalletCommand::List { workdir } => {
-            let manifest = WalletManifest::load(&workdir)?;
+            let manifest = WalletManifest::load(&workdir.workdir)?;
             for wallet in manifest.wallets {
                 println!(
                     "label={} wallet_id={} shielded_address={}",
@@ -303,7 +302,6 @@ fn upsert_wallet_record(
     label: &str,
     wallet: crate::railgun::LoadedWallet,
 ) -> Result<()> {
-    validate_label(label)?;
     let mut manifest = WalletManifest::load(workdir)?;
     manifest.upsert(WalletRecord {
         label: label.to_owned(),

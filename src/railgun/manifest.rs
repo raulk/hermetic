@@ -75,14 +75,16 @@ impl WalletManifest {
     }
 }
 
-/// Validate a user-facing wallet label.
+/// Validate a user-facing wallet label for use as a clap `value_parser`.
 ///
 /// # Errors
 ///
-/// Returns an error for empty labels.
-pub fn validate_label(label: &str) -> Result<()> {
-    anyhow::ensure!(!label.trim().is_empty(), "wallet label cannot be empty");
-    Ok(())
+/// Returns an error string for empty or whitespace-only labels.
+pub fn validate_label(label: &str) -> Result<String, String> {
+    if label.trim().is_empty() {
+        return Err("wallet label cannot be empty".to_owned());
+    }
+    Ok(label.to_owned())
 }
 
 #[cfg(test)]
@@ -203,6 +205,6 @@ mod tests {
 
     #[test]
     fn validate_label_accepts_normal_label() {
-        assert!(validate_label("main").is_ok());
+        assert_eq!(validate_label("main"), Ok("main".to_owned()));
     }
 }

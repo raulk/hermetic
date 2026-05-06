@@ -6,6 +6,9 @@ use http::Uri;
 
 use crate::signer::PublicSignerArgs;
 
+pub const SEPOLIA_CHAIN_ID: u64 = 11_155_111;
+pub const DEFAULT_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+
 #[derive(Debug, Parser)]
 #[command(name = "hermetic")]
 #[command(about = "Railgun transactions with Rust-owned Tor egress")]
@@ -20,13 +23,13 @@ pub enum Command {
     Ping {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = default_rpc())]
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
     },
     /// Verify runtime health, imports, and embedded network isolation.
     Doctor {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
     },
     /// Manage SDK-owned Railgun wallets.
     Wallet {
@@ -42,9 +45,9 @@ pub enum Command {
     Shield {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[command(flatten)]
+        workdir: WorkdirArgs,
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         signer: PublicSignerArgs,
@@ -59,9 +62,9 @@ pub enum Command {
     Balance {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[command(flatten)]
+        workdir: WorkdirArgs,
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         wallet: WalletSelectionArgs,
@@ -70,9 +73,9 @@ pub enum Command {
     Unshield {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[command(flatten)]
+        workdir: WorkdirArgs,
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         signer: PublicSignerArgs,
@@ -91,26 +94,26 @@ pub enum Command {
 pub enum WalletCommand {
     /// Import a mnemonic into the Railgun SDK artifact store.
     Import {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[arg(long)]
+        #[command(flatten)]
+        workdir: WorkdirArgs,
+        #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
         railgun: RailgunImportArgs,
     },
     /// Create a new Railgun wallet and print the mnemonic once.
     Create {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
-        #[arg(long)]
+        #[command(flatten)]
+        workdir: WorkdirArgs,
+        #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
         railgun: RailgunKeyArgs,
     },
     /// List known Railgun wallets without exposing secrets.
     List {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
     },
 }
 
@@ -120,6 +123,12 @@ pub struct TorArgs {
     pub tor_state: PathBuf,
     #[arg(long, default_value = "./.arti/cache")]
     pub tor_cache: PathBuf,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+pub struct WorkdirArgs {
+    #[arg(long, default_value = ".")]
+    pub workdir: PathBuf,
 }
 
 #[derive(Clone, Debug, clap::Args)]
@@ -142,8 +151,4 @@ pub struct WalletSelectionArgs {
     pub wallet: String,
     #[command(flatten)]
     pub key: RailgunKeyArgs,
-}
-
-fn default_rpc() -> &'static str {
-    "https://ethereum-sepolia-rpc.publicnode.com"
 }

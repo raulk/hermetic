@@ -24,12 +24,19 @@ use crate::transport::{ArtiConnector, ArtiJsonRpcTransport};
 pub struct TorRpcClient {
     tor: ArtiClient,
     rpc_url: Uri,
+    client: Client<ArtiConnector, Full<Bytes>>,
 }
 
 impl TorRpcClient {
     #[must_use]
     pub fn new(tor: ArtiClient, rpc_url: Uri) -> Self {
-        Self { tor, rpc_url }
+        let connector = ArtiConnector::new(tor.clone());
+        let client = Client::builder(TokioExecutor::new()).build(connector);
+        Self {
+            tor,
+            rpc_url,
+            client,
+        }
     }
 
     #[must_use]
@@ -89,8 +96,7 @@ impl TorRpcClient {
                 .context("decoding reverse HTTP request body")?,
             None => Vec::new(),
         };
-        let client: Client<ArtiConnector, Full<Bytes>> =
-            Client::builder(TokioExecutor::new()).build(ArtiConnector::new(self.tor.clone()));
+        let client = self.client.clone();
         let mut builder = http::Request::builder().method(method).uri(uri);
         let headers = builder
             .headers_mut()
