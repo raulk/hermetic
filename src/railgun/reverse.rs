@@ -105,3 +105,61 @@ pub struct ReverseHttpResponse {
     pub headers: Vec<(String, String)>,
     pub body_base64: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{service_endpoint, service_uri};
+
+    // ── service_endpoint ─────────────────────────────────────────────────────
+
+    #[test]
+    fn service_endpoint_graphql_returns_squid_url() {
+        let endpoint = service_endpoint("graphql").expect("graphql endpoint must be known");
+        assert_eq!(
+            endpoint,
+            "https://rail-squid.squids.live/squid-railgun-eth-sepolia-v2/graphql"
+        );
+    }
+
+    #[test]
+    fn service_endpoint_poi_returns_ppoi_aggregator_url() {
+        let endpoint = service_endpoint("poi").expect("poi endpoint must be known");
+        assert_eq!(endpoint, "https://ppoi-agg.horsewithsixlegs.xyz");
+    }
+
+    #[test]
+    fn service_endpoint_unknown_returns_err() {
+        assert!(service_endpoint("unknown").is_err());
+    }
+
+    // ── service_uri ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn service_uri_graphql_custom_path_composes_correctly() {
+        let uri = service_uri("graphql", Some("/custom-path"))
+            .expect("service_uri with valid path must succeed");
+        assert_eq!(
+            uri.to_string(),
+            "https://rail-squid.squids.live/custom-path"
+        );
+    }
+
+    #[test]
+    fn service_uri_graphql_none_path_uses_default() {
+        let uri = service_uri("graphql", None).expect("service_uri with None path must succeed");
+        assert_eq!(
+            uri.to_string(),
+            "https://rail-squid.squids.live/squid-railgun-eth-sepolia-v2/graphql"
+        );
+    }
+
+    #[test]
+    fn service_uri_path_without_leading_slash_returns_err() {
+        assert!(service_uri("graphql", Some("no-leading-slash")).is_err());
+    }
+
+    #[test]
+    fn service_uri_unknown_service_returns_err() {
+        assert!(service_uri("unknown", None).is_err());
+    }
+}
