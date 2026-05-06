@@ -22,16 +22,6 @@ const DENIED_FETCH_PROBE_URL = "https://example.com";
 const { AbstractLevelDOWN } = require("abstract-leveldown");
 const AbstractIterator = require("abstract-leveldown/abstract-iterator");
 
-globalThis.__dirname = `${workdir}/embedded`;
-globalThis.__filename = `${globalThis.__dirname}/railgun_runtime.bundle.mjs`;
-globalThis.__hermetic_deno_fetch = globalThis.fetch;
-Object.defineProperty(process, "env", {
-  value: {},
-  configurable: true,
-  enumerable: true,
-  writable: true,
-});
-
 let engineStarted = false;
 let networkLoaded = false;
 let localFilterID = 1;
@@ -48,19 +38,6 @@ let snarkMutationDepth = 0;
 
 function trace(message) {
   op_hermetic_log(`[hermetic-runtime] ${message}`);
-}
-
-function describeItem(item) {
-  if (item == null) {
-    return "null";
-  }
-  if (typeof item === "string") {
-    return `string:${item.length}`;
-  }
-  if (item.byteLength != null) {
-    return `bytes:${item.byteLength}`;
-  }
-  return typeof item;
 }
 
 function isJsonArtifact(relativePath) {
@@ -92,14 +69,18 @@ const artifactStore = new wallet.ArtifactStore(
       ? new TextDecoder().decode(item)
       : item;
     trace(
-      `artifact read path=${relativePath} result=${describeItem(artifact)} ms=${
-        Date.now() - started
-      }`,
+      `artifact read path=${relativePath} result=${
+        artifact?.byteLength ?? artifact?.length ?? "null"
+      } ms=${Date.now() - started}`,
     );
     return artifact;
   },
   (dir, relativePath, item) => {
-    trace(`artifact write path=${relativePath} item=${describeItem(item)}`);
+    trace(
+      `artifact write path=${relativePath} item=${
+        item?.byteLength ?? item?.length ?? "null"
+      }`,
+    );
     return op_hermetic_write_artifact(dir, relativePath, artifactBytes(item));
   },
   (relativePath) => {

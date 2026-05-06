@@ -22,7 +22,3 @@ pub async fn bootstrap(state_dir: &Path, cache_dir: &Path) -> Result<ArtiClient>
         .await
         .context("bootstrapping Tor client via Arti")
 }
-
-pub fn isolated_client(client: &ArtiClient) -> ArtiClient {
-    client.isolated_client()
-}

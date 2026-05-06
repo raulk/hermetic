@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use alloy_network::Ethereum;
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_provider::Provider;
@@ -10,7 +8,6 @@ use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelec
 use crate::railgun::manifest::{validate_label, WalletManifest, WalletRecord};
 use crate::railgun::{PopulatedTransaction, RailgunRuntime};
 use crate::signer::default_signer_address;
-use crate::transport::TOR_CONNECT_CALLS;
 use crate::{arti, rpc};
 
 /// Dispatch a parsed CLI command.
@@ -141,7 +138,7 @@ async fn balance(
     println!("token_address={}", refreshed.token_address);
     println!("balance={}", refreshed.balance);
     println!("spendable_balance={}", refreshed.spendable_balance);
-    ensure_tor_was_used("refresh completed")
+    Ok(())
 }
 
 struct UnshieldInput {
@@ -177,7 +174,6 @@ async fn unshield(runtime: &mut RailgunRuntime, input: UnshieldInput) -> Result<
     println!("from={from}");
     println!("recipient={recipient}");
     println!("amount_wei={}", input.amount_wei);
-    ensure_tor_was_used("unshield proof completed")?;
 
     if input.dry_run {
         return Ok(());
@@ -198,7 +194,7 @@ async fn ping(tor: TorArgs, rpc_url: http::Uri) -> Result<()> {
 
     println!("chain_id={chain_id}");
     println!("block_number={block_number}");
-    ensure_tor_was_used("provider call completed")
+    Ok(())
 }
 
 async fn doctor(runtime: &mut RailgunRuntime) -> Result<()> {
@@ -320,7 +316,7 @@ fn upsert_wallet_record(
 
 async fn bootstrap_tor(tor: TorArgs) -> Result<crate::arti::ArtiClient> {
     let tor = arti::bootstrap(&tor.tor_state, &tor.tor_cache).await?;
-    Ok(arti::isolated_client(&tor))
+    Ok(tor.isolated_client())
 }
 
 async fn bootstrap_rpc_client(tor: TorArgs, rpc_url: http::Uri) -> Result<rpc::TorRpcClient> {
@@ -388,13 +384,6 @@ async fn send_transaction(
         .await
         .with_context(|| format!("sending {label}"))?;
     println!("tx_hash={}", pending.tx_hash());
-    ensure_tor_was_used("transaction send completed")
-}
-
-fn ensure_tor_was_used(action: &str) -> Result<()> {
-    let calls = TOR_CONNECT_CALLS.load(Ordering::SeqCst);
-    println!("tor_connect_calls={calls}");
-    anyhow::ensure!(calls > 0, "{action} without Tor connector use");
     Ok(())
 }
 

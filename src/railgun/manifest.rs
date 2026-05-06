@@ -3,7 +3,6 @@ use std::path::Path;
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-const MANIFEST_VERSION: u8 = 1;
 const MANIFEST_PATH: &str = "artifacts/wallets.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -13,19 +12,9 @@ pub struct WalletRecord {
     pub shielded_address: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct WalletManifest {
-    pub version: u8,
     pub wallets: Vec<WalletRecord>,
-}
-
-impl Default for WalletManifest {
-    fn default() -> Self {
-        Self {
-            version: MANIFEST_VERSION,
-            wallets: Vec::new(),
-        }
-    }
 }
 
 impl WalletManifest {
@@ -42,11 +31,6 @@ impl WalletManifest {
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
         let manifest: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing {}", path.display()))?;
-        anyhow::ensure!(
-            manifest.version == MANIFEST_VERSION,
-            "unsupported wallet manifest version {}",
-            manifest.version
-        );
         Ok(manifest)
     }
 
@@ -175,7 +159,6 @@ mod tests {
             manifest.wallets.is_empty(),
             "default manifest must have no wallets"
         );
-        assert_eq!(manifest.version, 1);
     }
 
     // ── save + load round-trip ───────────────────────────────────────────────

@@ -1,6 +1,5 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -22,9 +21,6 @@ use tokio_rustls::TlsConnector;
 use tower::Service;
 
 use crate::arti::ArtiClient;
-
-pub static TOR_CONNECT_CALLS: AtomicUsize = AtomicUsize::new(0);
-static TOR_CONNECTION_IDS: AtomicUsize = AtomicUsize::new(0);
 
 type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 type HyperBody = Full<Bytes>;
@@ -76,10 +72,7 @@ impl Service<Uri> for ArtiConnector {
                 .to_owned();
             let port = uri.port_u16().unwrap_or(443);
 
-            let connection_id = TOR_CONNECTION_IDS.fetch_add(1, Ordering::SeqCst) + 1;
-            TOR_CONNECT_CALLS.fetch_add(1, Ordering::SeqCst);
             tracing::info!(
-                connection_id,
                 rpc_scheme = scheme,
                 rpc_host = %host,
                 rpc_port = port,
@@ -90,7 +83,6 @@ impl Service<Uri> for ArtiConnector {
                 .await
                 .with_context(|| format!("connecting to {host}:{port} through Tor"))?;
             tracing::info!(
-                connection_id,
                 rpc_host = %host,
                 rpc_port = port,
                 "Tor stream established; circuit path is not exposed by arti-client DataStream"
@@ -102,7 +94,7 @@ impl Service<Uri> for ArtiConnector {
                 .connect(server_name, stream)
                 .await
                 .context("performing rustls handshake over Tor stream")?;
-            tracing::info!(connection_id, "TLS handshake completed over Tor stream");
+            tracing::info!("TLS handshake completed over Tor stream");
 
             Ok(TokioIo::new(ArtiTlsStream(tls_stream)))
         })
