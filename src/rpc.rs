@@ -14,11 +14,11 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::str::FromStr;
 
-use crate::arti::ArtiClient;
-use crate::railgun::reverse::{
-    self, ReverseHttpRequest, ReverseHttpResponse, ReverseRequest, ReverseResponse,
-};
-use crate::transport::{ArtiConnector, ArtiJsonRpcTransport};
+use crate::railgun::reverse::{ReverseRequest, ReverseResponse};
+use crate::tor::connector::ArtiConnector;
+use crate::tor::json_rpc::ArtiJsonRpcTransport;
+use crate::tor::services::{self, ReverseHttpRequest, ReverseHttpResponse};
+use crate::tor::ArtiClient;
 
 #[derive(Clone)]
 pub struct TorRpcClient {
@@ -82,7 +82,7 @@ impl TorRpcClient {
         &self,
         request: ReverseHttpRequest,
     ) -> Result<ReverseHttpResponse> {
-        let uri = reverse::service_uri(&request.service, request.path.as_deref())?;
+        let uri = services::service_uri(&request.service, request.path.as_deref())?;
         tracing::info!(
             http_method = %request.method,
             http_service = %request.service,

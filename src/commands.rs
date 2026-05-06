@@ -8,7 +8,7 @@ use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelec
 use crate::railgun::manifest::{WalletManifest, WalletRecord};
 use crate::railgun::{PopulatedTransaction, RailgunRuntime};
 use crate::signer::default_signer_address;
-use crate::{arti, rpc};
+use crate::{rpc, tor};
 
 /// Dispatch a parsed CLI command.
 ///
@@ -312,8 +312,8 @@ fn upsert_wallet_record(
     Ok(())
 }
 
-async fn bootstrap_tor(tor: TorArgs) -> Result<crate::arti::ArtiClient> {
-    let tor = arti::bootstrap(&tor.tor_state, &tor.tor_cache).await?;
+async fn bootstrap_tor(tor: TorArgs) -> Result<crate::tor::ArtiClient> {
+    let tor = tor::bootstrap(&tor.tor_state, &tor.tor_cache).await?;
     Ok(tor.isolated_client())
 }
 

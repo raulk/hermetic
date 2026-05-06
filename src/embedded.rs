@@ -23,9 +23,10 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::railgun::reverse::{self, ReverseRequest, ReverseResponse};
+use crate::railgun::reverse::{ReverseRequest, ReverseResponse};
 use crate::railgun::Artifact;
 use crate::rpc::TorRpcClient;
+use crate::tor::services;
 
 #[derive(Debug)]
 struct NoNpm;
@@ -219,7 +220,7 @@ fn op_hermetic_artifact_exists(state: &mut OpState, #[string] relative_path: &st
 #[op2]
 #[string]
 fn op_hermetic_service_endpoint(#[string] service: &str) -> Result<String, JsErrorBox> {
-    reverse::service_endpoint(service)
+    services::service_endpoint(service)
         .map(str::to_owned)
         .map_err(|err| JsErrorBox::generic(err.to_string()))
 }
