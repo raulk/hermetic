@@ -397,3 +397,90 @@ fn ensure_tor_was_used(action: &str) -> Result<()> {
     anyhow::ensure!(calls > 0, "{action} without Tor connector use");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_populated_transaction;
+    use crate::railgun::PopulatedTransaction;
+
+    fn populated(
+        to: &str,
+        data: &str,
+        value: &str,
+        gas_limit: Option<&str>,
+    ) -> PopulatedTransaction {
+        PopulatedTransaction {
+            to: to.into(),
+            data: data.into(),
+            value: value.into(),
+            gas_limit: gas_limit.map(Into::into),
+        }
+    }
+
+    // ── happy paths ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_populated_transaction_happy_path_with_gas_limit() {
+        use alloy_primitives::{address, U256};
+
+        let tx = populated(
+            "0x0000000000000000000000000000000000000001",
+            "0xdeadbeef",
+            "1000000000000000000",
+            Some("21000"),
+        );
+        let parsed = parse_populated_transaction(&tx)
+            .expect("valid PopulatedTransaction must parse without error");
+
+        assert_eq!(
+            parsed.to,
+            address!("0000000000000000000000000000000000000001")
+        );
+        assert_eq!(parsed.value, U256::from(1_000_000_000_000_000_000_u128));
+        assert_eq!(parsed.gas_limit, Some(21_000_u64));
+        assert_eq!(parsed.data.len(), 4, "0xdeadbeef is 4 bytes");
+    }
+
+    #[test]
+    fn parse_populated_transaction_no_gas_limit_is_none() {
+        let tx = populated(
+            "0x0000000000000000000000000000000000000001",
+            "0xdeadbeef",
+            "0",
+            None,
+        );
+        let parsed = parse_populated_transaction(&tx)
+            .expect("valid PopulatedTransaction without gas_limit must parse");
+        assert_eq!(parsed.gas_limit, None);
+    }
+
+    // ── error paths ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_populated_transaction_invalid_address_returns_err() {
+        let tx = populated("not-an-address", "0xdeadbeef", "0", None);
+        assert!(parse_populated_transaction(&tx).is_err());
+    }
+
+    #[test]
+    fn parse_populated_transaction_non_decimal_value_returns_err() {
+        let tx = populated(
+            "0x0000000000000000000000000000000000000001",
+            "0xdeadbeef",
+            "not-a-number",
+            None,
+        );
+        assert!(parse_populated_transaction(&tx).is_err());
+    }
+
+    #[test]
+    fn parse_populated_transaction_malformed_hex_data_returns_err() {
+        let tx = populated(
+            "0x0000000000000000000000000000000000000001",
+            "0xzzzz",
+            "0",
+            None,
+        );
+        assert!(parse_populated_transaction(&tx).is_err());
+    }
+}

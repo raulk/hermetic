@@ -100,3 +100,126 @@ pub fn validate_label(label: &str) -> Result<()> {
     anyhow::ensure!(!label.trim().is_empty(), "wallet label cannot be empty");
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_label, WalletManifest, WalletRecord};
+
+    fn record(label: &str, wallet_id: &str) -> WalletRecord {
+        WalletRecord {
+            label: label.into(),
+            wallet_id: wallet_id.into(),
+            shielded_address: "0zk1qy0000000000000000000000000000000000000000000000000000000"
+                .into(),
+        }
+    }
+
+    // ── upsert ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn upsert_replaces_existing_label() {
+        let mut manifest = WalletManifest::default();
+        manifest.upsert(record("main", "id-first"));
+        manifest.upsert(record("main", "id-second"));
+        assert_eq!(
+            manifest.wallets.len(),
+            1,
+            "duplicate label must not grow the list"
+        );
+        assert_eq!(manifest.wallets[0].wallet_id, "id-second");
+    }
+
+    #[test]
+    fn upsert_appends_new_label() {
+        let mut manifest = WalletManifest::default();
+        manifest.upsert(record("alice", "id-alice"));
+        manifest.upsert(record("bob", "id-bob"));
+        assert_eq!(manifest.wallets.len(), 2);
+    }
+
+    // ── select ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_finds_by_label() {
+        let mut manifest = WalletManifest::default();
+        manifest.upsert(record("main", "abc123"));
+        let found = manifest
+            .select("main")
+            .expect("select by label must succeed");
+        assert_eq!(found.wallet_id, "abc123");
+    }
+
+    #[test]
+    fn select_finds_by_wallet_id() {
+        let mut manifest = WalletManifest::default();
+        manifest.upsert(record("main", "abc123"));
+        let found = manifest
+            .select("abc123")
+            .expect("select by wallet_id must succeed");
+        assert_eq!(found.label, "main");
+    }
+
+    #[test]
+    fn select_returns_err_for_unknown_selector() {
+        let manifest = WalletManifest::default();
+        assert!(manifest.select("ghost").is_err());
+    }
+
+    // ── load (missing file) ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_missing_file_returns_default() {
+        let dir = tempfile::tempdir().expect("tempdir must be created");
+        let manifest = WalletManifest::load(dir.path()).expect("load of missing file must succeed");
+        assert!(
+            manifest.wallets.is_empty(),
+            "default manifest must have no wallets"
+        );
+        assert_eq!(manifest.version, 1);
+    }
+
+    // ── save + load round-trip ───────────────────────────────────────────────
+
+    #[test]
+    fn save_then_load_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir must be created");
+        let mut manifest = WalletManifest::default();
+        manifest.upsert(WalletRecord {
+            label: "main".into(),
+            wallet_id: "abc123".into(),
+            shielded_address: "0zk1qyfirst000000000000000000000000000000000000000000000000000"
+                .into(),
+        });
+        manifest.upsert(WalletRecord {
+            label: "backup".into(),
+            wallet_id: "def456".into(),
+            shielded_address: "0zk1qysecond00000000000000000000000000000000000000000000000000"
+                .into(),
+        });
+        manifest.save(dir.path()).expect("save must succeed");
+
+        let loaded = WalletManifest::load(dir.path()).expect("load after save must succeed");
+        assert_eq!(loaded.wallets.len(), 2);
+        assert_eq!(loaded.wallets[0].label, "main");
+        assert_eq!(loaded.wallets[0].wallet_id, "abc123");
+        assert_eq!(loaded.wallets[1].label, "backup");
+        assert_eq!(loaded.wallets[1].wallet_id, "def456");
+    }
+
+    // ── validate_label ───────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_label_rejects_empty_string() {
+        assert!(validate_label("").is_err());
+    }
+
+    #[test]
+    fn validate_label_rejects_whitespace_only() {
+        assert!(validate_label("   ").is_err());
+    }
+
+    #[test]
+    fn validate_label_accepts_normal_label() {
+        assert!(validate_label("main").is_ok());
+    }
+}
