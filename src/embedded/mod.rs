@@ -54,7 +54,11 @@ impl EmbeddedDeno {
         Ok(Self { worker, invoke })
     }
 
-    /// Call a Railgun runtime method without reverse RPC.
+    /// Call a Railgun runtime method.
+    ///
+    /// If a `ReverseRpcService` was previously installed via `set_reverse`,
+    /// the embedded runtime can use it for reverse JSON-RPC and HTTP through
+    /// Tor; otherwise reverse requests fail at the op layer.
     ///
     /// # Errors
     ///
@@ -65,42 +69,16 @@ impl EmbeddedDeno {
         Req: Serialize,
         Res: DeserializeOwned,
     {
-        self.call_inner(method, params, None).await
+        let response = self.call_runtime(method, params).await?;
+        worker::decode_call_response(&response)
     }
 
-    /// Call a Railgun runtime method while servicing reverse JSON-RPC/HTTP via Tor.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if JavaScript execution fails, reverse RPC fails, or the
-    /// final result cannot be deserialized into `Res`.
-    pub async fn call_with_reverse<Req, Res>(
-        &mut self,
-        method: &str,
-        params: Req,
-        reverse: ReverseRpcService,
-    ) -> Result<Res>
-    where
-        Req: Serialize,
-        Res: DeserializeOwned,
-    {
-        self.call_inner(method, params, Some(reverse)).await
-    }
-
-    async fn call_inner<Req, Res>(
-        &mut self,
-        method: &str,
-        params: Req,
-        reverse: Option<ReverseRpcService>,
-    ) -> Result<Res>
-    where
-        Req: Serialize,
-        Res: DeserializeOwned,
-    {
-        self.set_reverse(reverse);
-        let call_result = self.call_runtime(method, params).await;
-        self.set_reverse(None);
-        worker::decode_call_response(&call_result?)
+    /// Install (or remove) the reverse-RPC service available to subsequent
+    /// `call` invocations.
+    pub fn set_reverse(&mut self, reverse: Option<ReverseRpcService>) {
+        let op_state = self.worker.js_runtime.op_state();
+        let mut state = op_state.borrow_mut();
+        state.borrow_mut::<EmbeddedHostState>().reverse = reverse;
     }
 
     async fn call_runtime<Req>(&mut self, method: &str, params: Req) -> Result<Value>
@@ -135,11 +113,5 @@ impl EmbeddedDeno {
             v8::Global::new(scope, method),
             v8::Global::new(scope, params),
         ])
-    }
-
-    fn set_reverse(&mut self, reverse: Option<ReverseRpcService>) {
-        let op_state = self.worker.js_runtime.op_state();
-        let mut state = op_state.borrow_mut();
-        state.borrow_mut::<EmbeddedHostState>().reverse = reverse;
     }
 }

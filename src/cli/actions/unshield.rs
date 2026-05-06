@@ -26,7 +26,7 @@ pub async fn run(
     let reverse = ReverseRpcService::new(arti.clone(), rpc.clone());
     let mut runtime = RailgunRuntime::new(&workdir.workdir)
         .await?
-        .with_reverse(reverse);
+        .connect(reverse);
 
     let public_wallet = signer.wallet().await?;
     let from = default_signer_address(&public_wallet);

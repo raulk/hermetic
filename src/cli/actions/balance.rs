@@ -17,7 +17,7 @@ pub async fn run(
     let reverse = ReverseRpcService::new(arti, rpc);
     let mut runtime = RailgunRuntime::new(&workdir.workdir)
         .await?
-        .with_reverse(reverse);
+        .connect(reverse);
 
     let railgun_wallet = load_selected_wallet(&mut runtime, &workdir.workdir, &wallet).await?;
     let refreshed = runtime.refresh_balance(&railgun_wallet.wallet_id).await?;
