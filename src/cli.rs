@@ -28,8 +28,8 @@ pub enum Command {
     },
     /// Verify runtime health, imports, and embedded network isolation.
     Doctor {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
     },
     /// Manage SDK-owned Railgun wallets.
     Wallet {
@@ -45,8 +45,8 @@ pub enum Command {
     Shield {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
         #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
@@ -62,8 +62,8 @@ pub enum Command {
     Balance {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
         #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
@@ -73,8 +73,8 @@ pub enum Command {
     Unshield {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
         #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
@@ -94,8 +94,8 @@ pub enum Command {
 pub enum WalletCommand {
     /// Import a mnemonic into the Railgun SDK artifact store.
     Import {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
         #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
@@ -103,8 +103,8 @@ pub enum WalletCommand {
     },
     /// Create a new Railgun wallet and print the mnemonic once.
     Create {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
         #[arg(long, value_parser = crate::railgun::manifest::validate_label)]
         label: String,
         #[command(flatten)]
@@ -112,8 +112,8 @@ pub enum WalletCommand {
     },
     /// List known Railgun wallets without exposing secrets.
     List {
-        #[arg(long, default_value = ".")]
-        workdir: PathBuf,
+        #[command(flatten)]
+        workdir: WorkdirArgs,
     },
 }
 
@@ -123,6 +123,12 @@ pub struct TorArgs {
     pub tor_state: PathBuf,
     #[arg(long, default_value = "./.arti/cache")]
     pub tor_cache: PathBuf,
+}
+
+#[derive(Clone, Debug, clap::Args)]
+pub struct WorkdirArgs {
+    #[arg(long, default_value = ".")]
+    pub workdir: PathBuf,
 }
 
 #[derive(Clone, Debug, clap::Args)]
