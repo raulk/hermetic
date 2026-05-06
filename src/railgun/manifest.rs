@@ -77,8 +77,9 @@ impl WalletManifest {
 
 /// Validate a user-facing wallet label for use as a clap `value_parser`.
 ///
-/// Returns `Ok(label.to_owned())` for non-empty labels, or an error string for
-/// empty/whitespace-only input.
+/// # Errors
+///
+/// Returns an error string for empty or whitespace-only labels.
 pub fn validate_label(label: &str) -> Result<String, String> {
     if label.trim().is_empty() {
         return Err("wallet label cannot be empty".to_owned());
