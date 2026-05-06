@@ -1,3 +1,6 @@
+# Nightly required for `unstable_features = true` in rustfmt.toml
+# (`imports_granularity = "Module"` is the only unstable feature in use).
+# Revisit when rustfmt stabilizes that option.
 [toolchain]
 channel = "nightly"
 components = ["rustfmt", "clippy"]

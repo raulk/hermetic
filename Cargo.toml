@@ -26,11 +26,13 @@ http = "1"
 http-body-util = "0.1"
 hyper = { version = "1.9", features = ["client", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }
-# deno_runtime 0.255 pulls ed448-goldilocks 0.14.0-pre.12, which expects
-# elliptic-curve's 0.14.0-rc.31 pkcs8 shape.
+# Pegged for deno_runtime 0.255 (transitive via ed448-goldilocks
+# 0.14.0-pre.12, which expects elliptic-curve's 0.14.0-rc.31 pkcs8 shape).
+# Revisit when bumping deno_runtime.
 elliptic-curve = "=0.14.0-rc.31"
 deno_semver = "0.9.1"
 node_resolver = { version = "0.85.0", features = ["sync"] }
+# Pegged for the same deno_runtime 0.255 chain as elliptic-curve above.
 pkcs8 = "=0.11.0-rc.11"
 sys_traits = "=0.1.27"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
