@@ -69,14 +69,18 @@ const artifactStore = new wallet.ArtifactStore(
       ? new TextDecoder().decode(item)
       : item;
     trace(
-      `artifact read path=${relativePath} result=${artifact?.byteLength ?? artifact?.length ?? "null"} ms=${
-        Date.now() - started
-      }`,
+      `artifact read path=${relativePath} result=${
+        artifact?.byteLength ?? artifact?.length ?? "null"
+      } ms=${Date.now() - started}`,
     );
     return artifact;
   },
   (dir, relativePath, item) => {
-    trace(`artifact write path=${relativePath} item=${item?.byteLength ?? item?.length ?? "null"}`);
+    trace(
+      `artifact write path=${relativePath} item=${
+        item?.byteLength ?? item?.length ?? "null"
+      }`,
+    );
     return op_hermetic_write_artifact(dir, relativePath, artifactBytes(item));
   },
   (relativePath) => {
