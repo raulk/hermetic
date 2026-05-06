@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import {
   op_hermetic_artifact_exists,
   op_hermetic_log,
@@ -15,6 +16,12 @@ globalThis.__hermetic_workdir = workdir;
 globalThis.__dirname = `${workdir}/embedded`;
 globalThis.__filename = `${globalThis.__dirname}/railgun_runtime.bundle.mjs`;
 globalThis.__hermetic_deno_fetch = globalThis.fetch;
+// Required: esbuild's CJS interop emits a __require shim that probes
+// `typeof require !== "undefined"`. Without this, dynamic require() calls
+// from the bundle (ethers, abstract-leveldown, etc) throw at runtime.
+globalThis.require = createRequire(
+  `file://${workdir}/railgun-runtime/runtime.mjs`,
+);
 
 globalThis.__hermetic_ops = {
   op_hermetic_artifact_exists,
