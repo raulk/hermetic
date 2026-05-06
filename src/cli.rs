@@ -4,10 +4,8 @@ use alloy_primitives::U256;
 use clap::{Parser, Subcommand};
 use http::Uri;
 
-use crate::signer::PublicSignerArgs;
-
-pub const SEPOLIA_CHAIN_ID: u64 = 11_155_111;
-pub const DEFAULT_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+use crate::eth::network::DEFAULT_RPC;
+use crate::eth::signer::PublicSignerArgs;
 
 #[derive(Debug, Parser)]
 #[command(name = "hermetic")]

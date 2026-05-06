@@ -4,7 +4,7 @@
 pub mod cli;
 pub mod commands;
 pub mod embedded;
+pub mod eth;
 pub mod railgun;
 pub mod rpc;
-pub mod signer;
 pub mod tor;

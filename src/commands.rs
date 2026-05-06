@@ -1,13 +1,12 @@
-use alloy_network::Ethereum;
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::U256;
 use alloy_provider::Provider;
-use alloy_rpc_types_eth::TransactionRequest;
 use anyhow::{Context as _, Result};
 
 use crate::cli::{Command, RailgunImportArgs, TorArgs, WalletCommand, WalletSelectionArgs};
+use crate::eth::signer::default_signer_address;
+use crate::eth::tx::{parse_populated_transaction, send_transaction};
 use crate::railgun::manifest::{WalletManifest, WalletRecord};
-use crate::railgun::{PopulatedTransaction, RailgunRuntime};
-use crate::signer::default_signer_address;
+use crate::railgun::RailgunRuntime;
 use crate::{rpc, tor};
 
 /// Dispatch a parsed CLI command.
@@ -97,7 +96,7 @@ async fn shield(
     runtime: &mut RailgunRuntime,
     workdir: &std::path::Path,
     rpc_client: rpc::TorRpcClient,
-    signer: crate::signer::PublicSignerArgs,
+    signer: crate::eth::signer::PublicSignerArgs,
     wallet: &WalletSelectionArgs,
     amount_wei: U256,
     dry_run: bool,
@@ -144,7 +143,7 @@ async fn balance(
 struct UnshieldInput {
     workdir: std::path::PathBuf,
     rpc_client: rpc::TorRpcClient,
-    signer: crate::signer::PublicSignerArgs,
+    signer: crate::eth::signer::PublicSignerArgs,
     wallet: WalletSelectionArgs,
     amount_wei: U256,
     recipient: Option<String>,
@@ -319,155 +318,4 @@ async fn bootstrap_tor(tor: TorArgs) -> Result<crate::tor::ArtiClient> {
 
 async fn bootstrap_rpc_client(tor: TorArgs, rpc_url: http::Uri) -> Result<rpc::TorRpcClient> {
     Ok(rpc::TorRpcClient::new(bootstrap_tor(tor).await?, rpc_url))
-}
-
-struct ParsedTransaction {
-    to: Address,
-    data: Bytes,
-    value: U256,
-    gas_limit: Option<u64>,
-}
-
-fn parse_populated_transaction(tx: &PopulatedTransaction) -> Result<ParsedTransaction> {
-    Ok(ParsedTransaction {
-        to: tx.to.parse().context("parsing Railgun tx.to")?,
-        data: tx.data.parse().context("parsing Railgun tx.data")?,
-        value: U256::from_str_radix(&tx.value, 10).context("parsing Railgun tx.value")?,
-        gas_limit: tx
-            .gas_limit
-            .as_deref()
-            .map(str::parse)
-            .transpose()
-            .context("parsing Railgun tx.gas_limit")?,
-    })
-}
-
-async fn send_transaction(
-    provider: impl Provider<Ethereum>,
-    from: Address,
-    tx: ParsedTransaction,
-    label: &str,
-) -> Result<()> {
-    let mut request = TransactionRequest::default()
-        .from(from)
-        .to(tx.to)
-        .value(tx.value)
-        .input(tx.data.into());
-    if let Some(gas_limit) = tx.gas_limit {
-        request = request.gas_limit(gas_limit);
-    }
-    let gas_limit = provider
-        .estimate_gas(request.clone())
-        .await
-        .with_context(|| format!("estimating gas for {label}"))?;
-    let gas_price = provider
-        .get_gas_price()
-        .await
-        .context("fetching current gas price")?;
-    let max_cost = tx.value + U256::from(gas_limit) * U256::from(gas_price);
-    let balance = provider
-        .get_balance(from)
-        .await
-        .context("checking signer balance")?;
-    println!("public_balance={balance}");
-    println!("estimated_gas={gas_limit}");
-    println!("gas_price={gas_price}");
-    println!("max_total_cost={max_cost}");
-    anyhow::ensure!(
-        balance >= max_cost,
-        "signer has insufficient Sepolia ETH: address {from} balance {balance}, max transaction cost {max_cost}",
-    );
-    let pending = provider
-        .send_transaction(request)
-        .await
-        .with_context(|| format!("sending {label}"))?;
-    println!("tx_hash={}", pending.tx_hash());
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_populated_transaction;
-    use crate::railgun::PopulatedTransaction;
-
-    fn populated(
-        to: &str,
-        data: &str,
-        value: &str,
-        gas_limit: Option<&str>,
-    ) -> PopulatedTransaction {
-        PopulatedTransaction {
-            to: to.into(),
-            data: data.into(),
-            value: value.into(),
-            gas_limit: gas_limit.map(Into::into),
-        }
-    }
-
-    // ── happy paths ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_populated_transaction_happy_path_with_gas_limit() {
-        use alloy_primitives::{address, U256};
-
-        let tx = populated(
-            "0x0000000000000000000000000000000000000001",
-            "0xdeadbeef",
-            "1000000000000000000",
-            Some("21000"),
-        );
-        let parsed = parse_populated_transaction(&tx)
-            .expect("valid PopulatedTransaction must parse without error");
-
-        assert_eq!(
-            parsed.to,
-            address!("0000000000000000000000000000000000000001")
-        );
-        assert_eq!(parsed.value, U256::from(1_000_000_000_000_000_000_u128));
-        assert_eq!(parsed.gas_limit, Some(21_000_u64));
-        assert_eq!(parsed.data.len(), 4, "0xdeadbeef is 4 bytes");
-    }
-
-    #[test]
-    fn parse_populated_transaction_no_gas_limit_is_none() {
-        let tx = populated(
-            "0x0000000000000000000000000000000000000001",
-            "0xdeadbeef",
-            "0",
-            None,
-        );
-        let parsed = parse_populated_transaction(&tx)
-            .expect("valid PopulatedTransaction without gas_limit must parse");
-        assert_eq!(parsed.gas_limit, None);
-    }
-
-    // ── error paths ──────────────────────────────────────────────────────────
-
-    #[test]
-    fn parse_populated_transaction_invalid_address_returns_err() {
-        let tx = populated("not-an-address", "0xdeadbeef", "0", None);
-        assert!(parse_populated_transaction(&tx).is_err());
-    }
-
-    #[test]
-    fn parse_populated_transaction_non_decimal_value_returns_err() {
-        let tx = populated(
-            "0x0000000000000000000000000000000000000001",
-            "0xdeadbeef",
-            "not-a-number",
-            None,
-        );
-        assert!(parse_populated_transaction(&tx).is_err());
-    }
-
-    #[test]
-    fn parse_populated_transaction_malformed_hex_data_returns_err() {
-        let tx = populated(
-            "0x0000000000000000000000000000000000000001",
-            "0xzzzz",
-            "0",
-            None,
-        );
-        assert!(parse_populated_transaction(&tx).is_err());
-    }
 }

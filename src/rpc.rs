@@ -1,6 +1,5 @@
 use alloy_network::{Ethereum, NetworkWallet};
-use alloy_provider::{Provider, ProviderBuilder, RootProvider};
-use alloy_rpc_client::RpcClient;
+use alloy_provider::{Provider, RootProvider};
 use anyhow::{anyhow, Context as _, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -14,9 +13,9 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::str::FromStr;
 
+use crate::eth::rpc as eth_rpc;
 use crate::railgun::reverse::{ReverseRequest, ReverseResponse};
 use crate::tor::connector::ArtiConnector;
-use crate::tor::json_rpc::ArtiJsonRpcTransport;
 use crate::tor::services::{self, ReverseHttpRequest, ReverseHttpResponse};
 use crate::tor::ArtiClient;
 
@@ -41,18 +40,14 @@ impl TorRpcClient {
 
     #[must_use]
     pub fn provider(&self) -> RootProvider<Ethereum> {
-        let transport = ArtiJsonRpcTransport::new(self.rpc_url.clone(), self.tor.clone());
-        let client = RpcClient::builder().transport(transport, false);
-        RootProvider::new(client)
+        eth_rpc::provider(&self.tor, self.rpc_url.clone())
     }
 
     pub fn wallet_provider(
         &self,
         wallet: impl NetworkWallet<Ethereum> + Clone + 'static,
     ) -> impl Provider<Ethereum> {
-        let transport = ArtiJsonRpcTransport::new(self.rpc_url.clone(), self.tor.clone());
-        let client = RpcClient::builder().transport(transport, false);
-        ProviderBuilder::new().wallet(wallet).connect_client(client)
+        eth_rpc::wallet_provider(&self.tor, self.rpc_url.clone(), wallet)
     }
 
     /// Send one reverse JSON-RPC request through Tor.
