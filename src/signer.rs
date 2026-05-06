@@ -11,7 +11,7 @@ pub struct PublicSignerArgs {
     private_key: Option<String>,
     #[arg(long)]
     ledger: bool,
-    #[arg(long, default_value_t = 11155111)]
+    #[arg(long, default_value_t = crate::cli::SEPOLIA_CHAIN_ID)]
     chain_id: u64,
     #[arg(long, default_value_t = 0)]
     ledger_index: usize,

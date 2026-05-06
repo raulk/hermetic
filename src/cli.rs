@@ -6,6 +6,9 @@ use http::Uri;
 
 use crate::signer::PublicSignerArgs;
 
+pub const SEPOLIA_CHAIN_ID: u64 = 11_155_111;
+pub const DEFAULT_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+
 #[derive(Debug, Parser)]
 #[command(name = "hermetic")]
 #[command(about = "Railgun transactions with Rust-owned Tor egress")]
@@ -20,7 +23,7 @@ pub enum Command {
     Ping {
         #[command(flatten)]
         tor: TorArgs,
-        #[arg(long, default_value = default_rpc())]
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
     },
     /// Verify runtime health, imports, and embedded network isolation.
@@ -44,7 +47,7 @@ pub enum Command {
         tor: TorArgs,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         signer: PublicSignerArgs,
@@ -61,7 +64,7 @@ pub enum Command {
         tor: TorArgs,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         wallet: WalletSelectionArgs,
@@ -72,7 +75,7 @@ pub enum Command {
         tor: TorArgs,
         #[arg(long, default_value = ".")]
         workdir: PathBuf,
-        #[arg(long, default_value = default_rpc())]
+        #[arg(long, default_value = DEFAULT_RPC)]
         rpc: Uri,
         #[command(flatten)]
         signer: PublicSignerArgs,
@@ -142,8 +145,4 @@ pub struct WalletSelectionArgs {
     pub wallet: String,
     #[command(flatten)]
     pub key: RailgunKeyArgs,
-}
-
-fn default_rpc() -> &'static str {
-    "https://ethereum-sepolia-rpc.publicnode.com"
 }
