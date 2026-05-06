@@ -316,7 +316,7 @@ fn upsert_wallet_record(
 
 async fn bootstrap_tor(tor: TorArgs) -> Result<crate::arti::ArtiClient> {
     let tor = arti::bootstrap(&tor.tor_state, &tor.tor_cache).await?;
-    Ok(arti::isolated_client(&tor))
+    Ok(tor.isolated_client())
 }
 
 async fn bootstrap_rpc_client(tor: TorArgs, rpc_url: http::Uri) -> Result<rpc::TorRpcClient> {
