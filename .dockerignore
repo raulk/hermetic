@@ -1,0 +1,22 @@
+# Build outputs
+target/
+embedded/
+
+# Local persistent state
+.arti/
+artifacts/
+.env
+
+# Dependencies (re-installed in builder stage)
+node_modules/
+**/node_modules/
+
+# VCS and CI metadata
+.git/
+.github/
+
+# Editor / OS junk
+.DS_Store
+**/.DS_Store
+.vscode/
+.idea/

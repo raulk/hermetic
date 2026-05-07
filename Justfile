@@ -19,6 +19,11 @@ deny:
 bundle:
     cd railgun-runtime && npm run bundle:embedded
 
+install:
+    cd railgun-runtime && npm ci
+    just bundle
+    cargo install --path .
+
 doctor: bundle
     cargo run -- doctor
 

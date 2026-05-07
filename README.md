@@ -44,6 +44,111 @@ the chain-privacy slot is tightly coupled to Railgun, and decoupling it is the n
   The hardware wallet only protects the public gas-payer EOA;
   the Railgun mnemonic is still loaded by the SDK runtime.
 
+## Quickstart
+
+The fastest path is the published Docker image, which bakes in the binary, the embedded Railgun bundle, and the SDK's WASM addons.
+A from-source path for contributors follows below.
+
+### Run via Docker
+
+The multi-arch image lives at `ghcr.io/raulk/hermetic:latest` (built for `linux/amd64` and `linux/arm64`).
+
+**1. Set up a working directory and secrets.**
+
+```sh
+mkdir hermetic && cd hermetic
+curl -L -O https://raw.githubusercontent.com/raulk/hermetic/main/.env.example
+mv .env.example .env
+printf "HERMETIC_RAILGUN_ENCRYPTION_KEY=%s\n" "$(openssl rand -hex 32)" >> .env
+```
+
+The encryption key is a local symmetric key for the SDK's wallet store, not a chain secret.
+
+**2. Define a `hermetic` alias.**
+
+```sh
+alias hermetic='docker run --rm -it \
+  -v "$(pwd)/artifacts":/app/artifacts \
+  -v "$(pwd)/.arti":/app/.arti \
+  --env-file .env \
+  ghcr.io/raulk/hermetic:latest'
+```
+
+The two volume mounts persist SDK proving keys plus wallet manifest (`artifacts/`) and the Tor consensus and circuit cache (`.arti/`) across runs.
+Without them every invocation re-downloads SDK artifacts and rebuilds the Tor circuit.
+
+**3. Verify Tor egress.**
+
+```sh
+hermetic ping --rpc https://ethereum-sepolia-rpc.publicnode.com
+```
+
+The first invocation waits for Arti to build a Tor circuit.
+
+**4. Create a Railgun wallet.**
+
+```sh
+hermetic wallet create --label main
+```
+
+The mnemonic is printed once.
+Save it outside the working directory;
+the manifest only stores the SDK wallet ID, the shielded address, and the label.
+
+**5. Refresh the private balance over Tor.**
+
+```sh
+hermetic balance --wallet main
+```
+
+This is the end-to-end check that does not require Sepolia ETH.
+The SDK reaches the Railgun squid GraphQL endpoint and the PPOI aggregator through the reverse-RPC bridge and Tor, syncs shielded notes for the fresh wallet, and reports a zero balance.
+If it returns without errors, every layer in the architecture diagram just got exercised.
+
+**6. (Optional, requires a funded Sepolia EOA) Shield and unshield 1 wei round-trip.**
+
+Add the gas-payer private key:
+
+```sh
+printf "HERMETIC_PRIVATE_KEY=0x...\n" >> .env
+```
+
+Shield, wait for the squid to index it, then unshield back:
+
+```sh
+hermetic shield --amount-wei 1 --wallet main
+# wait seconds to a couple of minutes for the squid to index the shield
+hermetic balance --wallet main          # shielded balance reports 1 wei
+hermetic unshield --amount-wei 1 --wallet main
+hermetic balance --wallet main          # shielded balance returns to 0
+```
+
+The full sequence (shield → squid index → balance → unshield proof → squid index → balance) exercises every layer of the access stack against a live testnet.
+Pass `--ledger` instead of setting `HERMETIC_PRIVATE_KEY` to sign with a hardware wallet.
+The `Commands` section below documents `--dry-run` if you want to populate without broadcasting.
+
+### Run from source
+
+For contributors who want to build the binary locally.
+
+**1. Prerequisites.**
+Rust 1.91+, Node and npm, `just`, and `openssl`.
+
+**2. Install.**
+
+```sh
+git clone https://github.com/raulk/hermetic && cd hermetic
+just install
+```
+
+`just install` runs `npm ci`, builds the embedded Railgun bundle, and `cargo install --path .`.
+The compiled binary lands at `~/.cargo/bin/hermetic`.
+
+**3. Run from the repo root.**
+
+The binary resolves `embedded/railgun_runtime.bundle.mjs` and the SDK's WASM addons from paths under the working directory, so all commands must be invoked from inside the cloned repo.
+From there, configure `.env` and follow steps 3 through 6 of the Docker path with `hermetic` in place of the aliased docker invocation.
+
 ## Architecture
 
 ```mermaid
