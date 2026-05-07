@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
-# ---- Builder ---------------------------------------------------------------
-FROM rust:1.91-slim-bookworm AS builder
+# ---- Base toolchain --------------------------------------------------------
+# Shared base for every builder stage. Installs apt deps, Node, mold, and
+# cargo-chef + sccache so each derived stage starts from the same toolchain.
+FROM rust:1.91-slim-bookworm AS chef
 
 ENV DEBIAN_FRONTEND=noninteractive \
     RUSTUP_TOOLCHAIN=stable \
@@ -14,40 +16,78 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update \
  && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        gnupg \
-        pkg-config \
-        libssl-dev \
-        clang \
-        build-essential \
+        ca-certificates curl gnupg pkg-config libssl-dev \
+        clang mold build-essential \
  && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
  && apt-get install -y --no-install-recommends nodejs
 
+# Install cargo-chef (deps/source split) and sccache (rustc invocation
+# cache). These are installed without RUSTC_WRAPPER set so sccache itself
+# can build; the wrapper is enabled after this layer for downstream stages.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=cargo-git-${TARGETARCH} \
+    cargo install cargo-chef --locked \
+ && cargo install sccache --locked
+
+# Tooling settings that apply to every downstream Rust build:
+#   * sccache wraps rustc so individual compilation units cache via cache mount.
+#   * mold replaces ld for link-time speedup on linux/amd64 and linux/arm64.
+ENV RUSTC_WRAPPER=sccache \
+    SCCACHE_DIR=/sccache \
+    SCCACHE_CACHE_SIZE=10G \
+    RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
 WORKDIR /build
 
-# Install JS deps first so the npm layer caches across Rust source changes.
-# /root/.npm is npm's package download cache; node_modules itself stays in
-# the layer because it is read by the bundle step that follows.
-COPY railgun-runtime/package.json railgun-runtime/package-lock.json ./railgun-runtime/
-RUN --mount=type=cache,target=/root/.npm,sharing=locked,id=npm-cache \
-    cd railgun-runtime && npm ci --no-audit --no-fund
+# ---- Recipe planner --------------------------------------------------------
+# Extracts a recipe.json describing the dependency graph. The recipe is
+# byte-stable across source-only changes, so downstream stages stay cached
+# when only src/ moves.
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Copy the rest of the source. .dockerignore strips target/, node_modules/,
-# embedded/, artifacts/, .arti/, .env, and .git so the build context is small.
-COPY . .
-
-# Build the embedded JS bundle. Output lands at /build/embedded/ in the layer.
-RUN cd railgun-runtime && npm run bundle:embedded
-
-# Build the Rust binary. Cargo registry, git, and target dir live on cache
-# mounts (per-arch ids prevent cross-platform reuse). The binary ends up
-# inside the cache-backed target/, so copy it out before the RUN closes.
+# ---- Dependency build ------------------------------------------------------
+# Compiles the entire dependency graph with cargo-chef. Layer cache key is
+# the recipe.json content (so it survives src/ changes). The cache mount on
+# /build/target lets Cargo's incremental compilation reuse compiled artifacts
+# across builds: a single dependency upgrade only recompiles that crate plus
+# its reverse-dependents, not the whole graph.
+FROM chef AS deps-builder
+COPY --from=planner /build/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=cargo-registry-${TARGETARCH} \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=cargo-git-${TARGETARCH} \
     --mount=type=cache,target=/build/target,sharing=locked,id=cargo-target-${TARGETARCH} \
+    --mount=type=cache,target=/sccache,sharing=locked,id=sccache-${TARGETARCH} \
+    cargo chef cook --release --recipe-path recipe.json \
+ && sccache --show-stats
+
+# ---- JS bundle build -------------------------------------------------------
+# Independent of the Rust build: a transient npm flake here doesn't cost the
+# dependency compile.
+FROM chef AS bundle-builder
+COPY railgun-runtime/package.json railgun-runtime/package-lock.json ./railgun-runtime/
+RUN --mount=type=cache,target=/root/.npm,sharing=locked,id=npm-cache \
+    cd railgun-runtime && npm ci --no-audit --no-fund
+COPY railgun-runtime ./railgun-runtime
+RUN cd railgun-runtime && npm run bundle:embedded
+
+# ---- Final builder ---------------------------------------------------------
+# Inherits from deps-builder so the cooked dependency graph is already
+# present. Only this stage rebuilds when src/ changes.
+FROM deps-builder AS builder
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY --from=bundle-builder /build/embedded /build/embedded
+COPY --from=bundle-builder /build/railgun-runtime/node_modules /build/railgun-runtime/node_modules
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked,id=cargo-registry-${TARGETARCH} \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked,id=cargo-git-${TARGETARCH} \
+    --mount=type=cache,target=/build/target,sharing=locked,id=cargo-target-${TARGETARCH} \
+    --mount=type=cache,target=/sccache,sharing=locked,id=sccache-${TARGETARCH} \
     cargo build --release --locked --bin hermetic \
- && cp /build/target/release/hermetic /tmp/hermetic
+ && cp /build/target/release/hermetic /tmp/hermetic \
+ && sccache --show-stats
 
 # ---- Runtime ---------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
@@ -61,21 +101,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /app
 
-# The Rust binary, copied out of the cache-mounted target/ in the builder.
 COPY --from=builder /tmp/hermetic /usr/local/bin/hermetic
-
-# The embedded Railgun bundle (loaded at runtime by the Deno worker).
 COPY --from=builder /build/embedded/railgun_runtime.bundle.mjs /app/embedded/railgun_runtime.bundle.mjs
-
-# WASM addons that the SDK loads at runtime via Node module resolution. Kept
-# under the same path the Deno permissions allowlist expects.
 COPY --from=builder /build/railgun-runtime/node_modules/@railgun-community/poseidon-hash-wasm \
      /app/railgun-runtime/node_modules/@railgun-community/poseidon-hash-wasm
 COPY --from=builder /build/railgun-runtime/node_modules/@railgun-community/curve25519-scalarmult-wasm \
      /app/railgun-runtime/node_modules/@railgun-community/curve25519-scalarmult-wasm
 
-# Persistent state lives under these mountpoints. VOLUME documents the
-# contract; users supply named volumes or bind mounts at `docker run` time.
 RUN mkdir -p /app/artifacts /app/.arti
 VOLUME ["/app/artifacts", "/app/.arti"]
 
